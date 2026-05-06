@@ -41,7 +41,7 @@ The setup script walks through:
 - **Secrets handled carefully.** API keys are read via `Read-Host -AsSecureString`, stored temporarily in `%LOCALAPPDATA%\MikeBot-Setup\` (which has user-only permissions by Windows convention), and cleaned up with explicit instructions after setup completes.
 - **Colored, categorized output.** Success/warning/failure/info messages use distinct colors so Mike can scan visually without parsing text.
 - **Wizard answers cheat sheet.** Stage 10 prints the exact answer for every `openclaw onboard` prompt, with explicit instructions to STOP and screenshot if anything differs.
-- **Retry/skip/quit on every fallible step.** No single failure traps the user. Every operation can be retried, skipped, or the setup can be quit with progress saved.
+- **Retry/skip/quit on most fallible steps.** Stages 4, 6, 7, 8, 9, 10, and 13 offer retry, skip, or quit options when operations fail. Stage 1 (old Windows) exits immediately since no workaround exists. Progress is always saved before exit.
 
 ## For Maintainers
 

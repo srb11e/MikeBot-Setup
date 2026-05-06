@@ -991,6 +991,16 @@ if (-not (Test-StageAlreadyComplete 10)) {
     # Set the env vars OpenClaw onboarding will pick up
     $dsKey  = Get-Secret -Key "DEEPSEEK_API_KEY"
     $tgToken = Get-Secret -Key "TELEGRAM_BOT_TOKEN"
+
+    if (-not $dsKey -or -not $tgToken) {
+        Write-Fail "Could not load your saved keys."
+        if (-not $dsKey)  { Write-Plain "  DeepSeek API key not found -- go back to Stage 7." }
+        if (-not $tgToken) { Write-Plain "  Telegram bot token not found -- go back to Stage 6." }
+        Write-Plain "  If you already saved them, close this window and re-run Setup-MikeBot.bat."
+        Wait-ForReturn "Press Enter to exit..."
+        exit 1
+    }
+
     $env:DEEPSEEK_API_KEY      = $dsKey
     $env:TELEGRAM_BOT_TOKEN    = $tgToken
 
@@ -1189,7 +1199,9 @@ if (-not (Test-StageAlreadyComplete 13)) {
     Write-Host ""
 
     $pairOk = $false
+    $pairAttempts = 0
     while (-not $pairOk) {
+        $pairAttempts++
         $code = Read-Host "  Paste the pairing code"
         if ($code -match '^[A-Za-z0-9_\-]+$' -and $code.Length -ge 4) {
             try {
@@ -1210,17 +1222,37 @@ if (-not (Test-StageAlreadyComplete 13)) {
                         Write-Plain "  Output: $result"
                         Write-Plain "  If you see 'unknown command', the pairing system may"
                         Write-Plain "  have changed. Take a screenshot and text Shands."
-                        $retry = Read-Host "  Try a different code? (y/n)"
-                        if ($retry -notmatch '^[Yy]') { break }
                     }
                 }
             } catch {
                 Write-Fail "Error: $($_.Exception.Message)"
-                $retry = Read-Host "  Try again? (y/n)"
-                if ($retry -notmatch '^[Yy]') { break }
             }
         } else {
             Write-Warn "That doesn't look like a valid code. Try again."
+        }
+
+        if (-not $pairOk) {
+            if ($pairAttempts -ge 3) {
+                Write-Host ""
+                Write-Plain "  Pairing has failed $pairAttempts times. Three options:"
+                Write-Plain "    r) Try again with a different code"
+                Write-Plain "    s) Skip pairing for now (you can do it manually later)"
+                Write-Plain "    q) Quit and contact Shands"
+                Write-Host ""
+                $choice = Read-Host "  Choose (r/s/q)"
+                switch -Regex ($choice) {
+                    '^[Ss]' { break }
+                    '^[Qq]' {
+                        Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                        exit 0
+                    }
+                    default { Write-Info "Retrying..." }
+                }
+                if ($choice -match '^[Ss]') { break }
+            } else {
+                $retry = Read-Host "  Try a different code? (y/n)"
+                if ($retry -notmatch '^[Yy]') { break }
+            }
         }
     }
 
