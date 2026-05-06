@@ -10,6 +10,10 @@ Turnkey Windows onboarding scripts that walk a non-technical user through instal
 | `Setup-MikeBot.ps1` | 15-stage guided setup wizard with progress tracking and resume-from-anywhere |
 | `Setup-MikeBot-Diagnostic.ps1` | Read-only diagnostic — collects system info for remote troubleshooting |
 | `README-FOR-MIKE.pdf` | One-page printable guide for the end user (Mike) |
+| `test-plan.md` | End-to-end test plan for real-laptop verification |
+| `audit-report.md` | Read-only safety audit report (10 checks, PSScriptAnalyzer results) |
+| `PSScriptAnalyzerSettings.psd1` | PSScriptAnalyzer rule suppressions for by-design patterns |
+| `phase0-findings.md` … `phase3-report.md` | Remediation history from the red-team audit |
 
 ## Architecture
 
@@ -33,8 +37,8 @@ The setup script walks through:
 
 ## Design Decisions
 
-- **Resilience over polish.** Progress saves to `%USERPROFILE%\MikeBot-Setup\.progress` after each stage. If the window closes, power is lost, or internet drops — double-clicking `Setup-MikeBot.bat` resumes from the last completed stage.
-- **Secrets handled carefully.** API keys are read via `Read-Host -AsSecureString`, stored temporarily in an ACL-locked file, and cleaned up with explicit instructions after setup completes.
+- **Resilience over polish.** Progress saves to `%LOCALAPPDATA%\MikeBot-Setup\.progress` after each stage. If the window closes, power is lost, or internet drops — double-clicking `Setup-MikeBot.bat` resumes from the last completed stage.
+- **Secrets handled carefully.** API keys are read via `Read-Host -AsSecureString`, stored temporarily in `%LOCALAPPDATA%\MikeBot-Setup\` (which has user-only permissions by Windows convention), and cleaned up with explicit instructions after setup completes.
 - **Colored, categorized output.** Success/warning/failure/info messages use distinct colors so Mike can scan visually without parsing text.
 - **Wizard answers cheat sheet.** Stage 10 prints the exact answer for every `openclaw onboard` prompt, with explicit instructions to STOP and screenshot if anything differs.
 - **Retry/skip/quit on every fallible step.** No single failure traps the user. Every operation can be retried, skipped, or the setup can be quit with progress saved.
@@ -47,15 +51,16 @@ This is a Shands-maintained project. Mike does not edit these files.
 - The `openclaw onboard` wizard may change its prompts — Stage 10's cheat sheet needs to stay current
 - The `openclaw pairing approve` command syntax may differ across OpenClaw versions — Stage 13 tries both old and new formats
 - DeepSeek's onboarding flow (account creation, API key UI) could change — Stage 7 instructions may drift
-- The Telegram token regex accepts standard BotFather tokens; a `force` override exists for edge cases
+- The Telegram token and DeepSeek key regexes are intentionally permissive; after 3 validation failures, an "accept anyway" escape hatch lets Mike force-save a key the regex doesn't recognize
 
 ### Testing checklist before shipping to Mike
-1. Run on a fresh Windows VM (or reset laptop)
-2. Verify all 15 stages complete without manual intervention beyond the prompts that require it
-3. Verify resume-from-each-stage works (kill the script mid-stage and relaunch)
-4. Confirm `openclaw pairing approve` syntax matches installed version
-5. Run `Setup-MikeBot-Diagnostic.ps1` and verify all checks pass on a healthy install
-6. Send a message from phone and confirm round-trip reply < 15 seconds
+1. Run `Invoke-ScriptAnalyzer` with `PSScriptAnalyzerSettings.psd1` — both scripts should return zero issues
+2. Run on a fresh Windows VM (or reset laptop)
+3. Verify all 15 stages complete without manual intervention beyond the prompts that require it
+4. Verify resume-from-each-stage works (kill the script mid-stage and relaunch)
+5. Confirm `openclaw pairing approve` syntax matches installed version
+6. Run `Setup-MikeBot-Diagnostic.ps1` and verify all checks pass on a healthy install
+7. Send a message from phone and confirm round-trip reply < 15 seconds
 
 ## Troubleshooting
 
