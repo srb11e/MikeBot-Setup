@@ -151,15 +151,21 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
 # -----------------------------------------------------------------------------
 Section "Gateway Port (18789)"
 # -----------------------------------------------------------------------------
+# Raw .NET socket test instead of Test-NetConnection — faster and avoids
+# spurious warnings on locked-down machines.
 try {
-    $tcp = Test-NetConnection -ComputerName "127.0.0.1" -Port 18789 -InformationLevel Quiet -WarningAction SilentlyContinue
-    if ($tcp) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $connect = $client.BeginConnect("127.0.0.1", 18789, $null, $null)
+    if ($connect.AsyncWaitHandle.WaitOne(3000)) {
+        $client.EndConnect($connect)
+        $client.Close()
         OK "Port 18789 is listening on localhost."
     } else {
+        $client.Close()
         Bad "Port 18789 is NOT listening — gateway probably isn't running."
     }
 } catch {
-    Note "Couldn't run Test-NetConnection: $($_.Exception.Message)"
+    Note "Couldn't test port 18789: $($_.Exception.Message)"
 }
 
 try {

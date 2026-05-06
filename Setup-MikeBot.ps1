@@ -81,6 +81,7 @@ $ProgressDir  = Join-Path $env:LOCALAPPDATA "MikeBot-Setup"
 $ProgressFile = Join-Path $ProgressDir   ".progress"
 $EnvFile      = Join-Path $ProgressDir   ".env"  # stores API keys etc. between stages
 $LogFile      = Join-Path $ProgressDir   "setup-log.md"
+$TokenFile    = Join-Path $ProgressDir   "dashboard-token.txt"  # separate to avoid collision with log
 $Script:LastCompleted = 0
 $Script:TotalStages   = 15
 
@@ -135,19 +136,11 @@ function Save-Secret {
     $existing += "$Key=$Value"
     $existing | Set-Content -Path $EnvFile -Encoding UTF8
 
-    # Lock the file down to just Mike's account
-    try {
-        $acl = Get-Acl $EnvFile
-        $acl.SetAccessRuleProtection($true, $false)
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $env:USERNAME, "FullControl", "Allow"
-        )
-        $acl.SetAccessRule($rule)
-        Set-Acl -Path $EnvFile -AclObject $acl
-    } catch {
-        # If ACL hardening fails, continue anyway — the file is in his user profile
-        Write-Warn "Could not lock secret file permissions. File is still in your user folder: $EnvFile"
-    }
+    # No explicit ACL hardening here.
+    # F1.5 moved all setup state to LOCALAPPDATA, which Windows defaults
+    # to user-only permissions. Adding Set-Acl on top would strip inheritance
+    # and risk locking out admin recovery without meaningfully improving
+    # security over the LOCALAPPDATA baseline.
 }
 
 function Get-Secret {
@@ -171,12 +164,37 @@ function Test-CommandExists {
 }
 
 function Refresh-EnvironmentPath {
-    # winget installs add things to PATH but the change doesn't reach the
-    # currently-running process. Pull the latest PATH from the registry so
-    # newly-installed tools (node, git, openclaw) become visible.
+    # Pulls the latest PATH from registry so newly-installed tools become visible.
+    # winget installs add to PATH but the change doesn't reach the running process.
+    # Called after every install stage and at resume.
     $machine = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $user    = [System.Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machine;$user"
+}
+
+function Assert-ToolAvailable {
+    param(
+        [string]$Name,
+        [string]$FriendlyName = $Name,
+        [string]$NextStage = "the next stage"
+    )
+    if (Test-CommandExists $Name) {
+        return $true
+    }
+    # One retry after a short pause — PATH updates can race winget's post-install hooks.
+    Write-Info "$FriendlyName not found in PATH yet. Waiting a moment and retrying..."
+    Start-Sleep -Seconds 5
+    Refresh-EnvironmentPath
+    if (Test-CommandExists $Name) {
+        return $true
+    }
+    Write-Warn "$FriendlyName still not available."
+    Write-Plain ""
+    Write-Plain "  Close this window, then double-click Setup-MikeBot.bat again."
+    Write-Plain "  Your progress is saved — it will resume from $NextStage."
+    Write-Plain ""
+    Wait-ForReturn "Press Enter to close..."
+    exit 0
 }
 
 # -----------------------------------------------------------------------------
@@ -220,7 +238,7 @@ function Invoke-WithRetrySkipQuit {
     param(
         [scriptblock]$Action,           # returns $true on success, $false on failure
         [string]$StepName,
-        [int]$MaxRetries = 3
+        [int]$MaxRetries = 3            # after this many failures, retry is removed
     )
     $attempts = 0
     while ($true) {
@@ -231,27 +249,41 @@ function Invoke-WithRetrySkipQuit {
         Write-Host ""
         Write-Fail "$StepName failed."
 
-        if ($attempts -ge $MaxRetries) {
-            Write-Warn "This step has failed $attempts times."
-            Write-Plain "If you need help, send Shands the contents of:"
-            Write-Plain "    $LogFile"
+        $capped = ($attempts -ge $MaxRetries)
+        if ($capped) {
+            Write-Warn "This step has failed $attempts times. Retry is no longer available."
+            Write-Plain "If you need help, send Shands a screenshot of this window."
         }
 
         Write-Host ""
         Write-Plain "Options:"
-        Write-Plain "    r) Retry this step"
+        if (-not $capped) {
+            Write-Plain "    r) Retry this step"
+        }
         Write-Plain "    s) Skip and continue to the next step"
         Write-Plain "    q) Quit (your progress is saved — you can resume later)"
         Write-Host ""
-        $choice = Read-Host "  Choose (r/s/q)"
+        $choice = Read-Host "  Choose ($(if (-not $capped) {'r/'})s/q)"
         switch -Regex ($choice) {
-            '^[Rr]' { Write-Info "Retrying..."; continue }
+            '^[Rr]' {
+                if ($capped) {
+                    Write-Plain "  Retry is no longer available for this step. Choose s or q."
+                } else {
+                    Write-Info "Retrying..."; continue
+                }
+            }
             '^[Ss]' { return $false }
             '^[Qq]' {
                 Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
                 exit 0
             }
-            default { Write-Info "Retrying..."; continue }
+            default {
+                if ($capped) {
+                    Write-Plain "  Retry is no longer available for this step. Choose s or q."
+                } else {
+                    Write-Info "Retrying..."; continue
+                }
+            }
         }
     }
 }
@@ -298,6 +330,10 @@ Write-Bold "  WHAT IT WILL NOT DO:"
 Write-Plain "    - Touch your email, files, or personal documents"
 Write-Plain "    - Install anything you do not need"
 Write-Plain "    - Send any data anywhere except DeepSeek's API and Telegram"
+Write-Host ""
+Write-Bold "  ABOUT YOUR FILES:"
+Write-Plain "    - Setup files (including any keys you paste) are stored in a"
+Write-Plain "      non-synced folder on this PC — not in OneDrive or the cloud."
 Write-Host ""
 Write-Bold "  IF YOU NEED TO STOP:"
 Write-Plain "    - Close this window any time. Your progress is saved."
@@ -877,15 +913,7 @@ if (-not (Should-Skip 9)) {
 
     # Make sure node is in PATH from Stage 4
     Refresh-EnvironmentPath
-
-    if (-not (Test-CommandExists "node")) {
-        Write-Fail "Node.js isn't available yet. We need to close and reopen this window."
-        Write-Plain ""
-        Write-Plain "  Close this window, then double-click Setup-MikeBot.bat again."
-        Write-Plain "  It will resume from this stage with Node.js available."
-        Wait-ForReturn "Press Enter to exit..."
-        exit 0
-    }
+    Assert-ToolAvailable -Name "node" -FriendlyName "Node.js" -NextStage "Stage 9 (Install OpenClaw)"
 
     $installOk = Invoke-WithRetrySkipQuit -StepName "Installing OpenClaw" -Action {
         try {
@@ -1090,8 +1118,9 @@ if (-not (Should-Skip 12)) {
             Write-Plain "  To retrieve it later, open PowerShell and run:"
             Write-Plain "    openclaw config get gateway.auth.token"
 
-            # Also save to setup log
-            "## Dashboard Token`n`n``$token``" | Add-Content -Path $LogFile
+            # Save to a separate file so Stage 15's log overwrite doesn't destroy it.
+            $token | Set-Content -Path $TokenFile -Encoding UTF8
+            Write-Plain "  Token also saved to: $TokenFile"
         } else {
             Write-Warn "Couldn't read the token automatically. Get it later with:"
             Write-Plain "    openclaw config get gateway.auth.token"
@@ -1208,12 +1237,94 @@ if (-not (Should-Skip 14)) {
     Write-Plain "    you should see the same conversation."
     Write-Host ""
 
+    # Capture a timestamp BEFORE the user sends the test message.
+    # We'll use this to filter log lines so we only check messages from this test.
+    $testStartTime = Get-Date
+
     $testOk = $false
     while (-not $testOk) {
         $reply = Read-Host "  Did the bot reply? (y = yes, n = no, s = skip and finish setup)"
         if ($reply -match '^[Yy]') {
-            Write-Success "Your bot is alive and answering!"
-            $testOk = $true
+            # Verify the message actually traveled the full path by checking logs.
+            # This converts Mike's job from "search" to "verification" — we do the
+            # filtering; he confirms what he sees.
+            Write-Host ""
+            Write-Info "Checking the bot's logs to confirm the message traveled the full path..."
+            Write-Host ""
+
+            $logConfirmed = $false
+            try {
+                $logOutput = & openclaw logs --json --limit 30 --no-color 2>&1
+                $telegramLines = @()
+                $deepseekLines = @()
+
+                foreach ($line in $logOutput) {
+                    try {
+                        $entry = $line | ConvertFrom-Json
+                        # Only consider log entries after the test started
+                        if ($entry.time) {
+                            $entryTime = [DateTime]::Parse($entry.time)
+                            if ($entryTime -lt $testStartTime) { continue }
+                        }
+                        $msg = if ($entry.message) { $entry.message } else { "$entry" }
+                        if ($msg -match 'telegram') {
+                            $telegramLines += $msg
+                        }
+                        if ($msg -match 'deepseek|api\.deepseek') {
+                            $deepseekLines += $msg
+                        }
+                    } catch {
+                        # Skip lines that aren't valid JSON
+                    }
+                }
+
+                # Show Mike what we found so he can verify, not search.
+                if ($telegramLines.Count -gt 0) {
+                    Write-Plain "  Lines mentioning 'telegram' ($($telegramLines.Count) found):"
+                    $telegramLines | Select-Object -First 5 | ForEach-Object {
+                        $short = if ($_.Length -gt 120) { $_.Substring(0, 117) + "..." } else { $_ }
+                        Write-Plain "    - $short"
+                    }
+                } else {
+                    Write-Plain "  No lines mentioning 'telegram' were found in recent logs."
+                }
+
+                Write-Host ""
+                if ($deepseekLines.Count -gt 0) {
+                    Write-Plain "  Lines mentioning 'deepseek' ($($deepseekLines.Count) found):"
+                    $deepseekLines | Select-Object -First 5 | ForEach-Object {
+                        $short = if ($_.Length -gt 120) { $_.Substring(0, 117) + "..." } else { $_ }
+                        Write-Plain "    - $short"
+                    }
+                } else {
+                    Write-Plain "  No lines mentioning 'deepseek' were found in recent logs."
+                }
+
+                Write-Host ""
+                $tgSeen = Read-Host "  In the lines above, do you see at least one that mentions 'telegram'? (y/n)"
+                $dsSeen = Read-Host "  Do you see at least one that mentions 'deepseek' or 'api.deepseek'? (y/n)"
+
+                if (($tgSeen -match '^[Yy]') -and ($dsSeen -match '^[Yy]')) {
+                    Write-Success "Logs confirm the message traveled the full path: Telegram -> DeepSeek -> Telegram."
+                    $logConfirmed = $true
+                    $testOk = $true
+                } else {
+                    Write-Warn "The logs don't clearly show the full message path."
+                    Write-Plain "  Your bot may still be working — the log messages can vary."
+                    Write-Plain "  But to be safe, take a screenshot of this window and text it to Shands."
+                    Write-Plain "  He can check whether everything is actually connected."
+                    Write-Host ""
+                    $forceOk = Read-Host "  Continue anyway? (y = yes, finish setup / n = test again)"
+                    if ($forceOk -match '^[Yy]') {
+                        $testOk = $true
+                    }
+                }
+            } catch {
+                Write-Warn "Couldn't check the logs: $($_.Exception.Message)"
+                Write-Plain "  This is usually fine — your bot replied, so the path is working."
+                Write-Plain "  If you want to double-check, run: openclaw logs"
+                $testOk = $true
+            }
         } elseif ($reply -match '^[Ss]') {
             Write-Warn "Skipped. You can test later."
             break
@@ -1298,6 +1409,7 @@ $logContent = @"
 
 - Setup progress (safe to delete): ``$ProgressFile``
 - Temporary secrets file (DELETE after a few days): ``$EnvFile``
+- Dashboard token (keep this one): ``$TokenFile``
 - OpenClaw config: ``%USERPROFILE%\.openclaw\``
 
 ## To Get Dashboard Token
