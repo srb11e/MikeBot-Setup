@@ -9,7 +9,7 @@ The four files under test live in this workspace:
 - `Setup-MikeBot.bat` — double-clickable launcher (handles admin elevation)
 - `Setup-MikeBot.ps1` — 15-stage guided setup wizard with progress tracking
 - `Setup-MikeBot-Diagnostic.ps1` — read-only diagnostic for remote troubleshooting
-- `README-FOR-MIKE.pdf` — one-page user guide
+- `README.md` — maintainer-facing readme (the user-facing guide is `README-FOR-MIKE.pdf`; Cursor can't read PDF reliably, so reference README.md for content and ask me about anything PDF-specific)
 
 A full test plan lives at `test-plan.md` in this workspace. Read it first — it's your reference. This prompt is the operational companion to that plan.
 
@@ -25,11 +25,17 @@ A full test plan lives at `test-plan.md` in this workspace. Read it first — it
 
 ## Pre-flight
 
-Before any test steps, do these checks and report results:
+**Before starting Step 1, Shands must have already created a throwaway Telegram bot via BotFather and have the token ready.** Also have a separate throwaway DeepSeek API key ready. Bot and account creation mid-test wastes time.
+
+Before any test steps, Cursor should first confirm the workspace, then do these checks and report results:
 
 ```
-1. Confirm all four files exist in this workspace:
-   ls Setup-MikeBot.bat Setup-MikeBot.ps1 Setup-MikeBot-Diagnostic.ps1 README-FOR-MIKE.pdf
+0. Confirm workspace folder contains all four test files:
+   pwd
+   ls Setup-MikeBot.bat, Setup-MikeBot.ps1, Setup-MikeBot-Diagnostic.ps1, test-plan.md
+   If pwd is not the folder containing these files, ask me to fix the workspace before continuing.
+
+1. Confirm all four files exist:
 
 2. Check PowerShell version:  $PSVersionTable.PSVersion
    (Needs 5.1+; anything lower is a blocking issue.)
@@ -37,8 +43,9 @@ Before any test steps, do these checks and report results:
 3. Check winget availability:  winget --version
    (Needs to exist; if missing, machine needs App Installer from Microsoft Store.)
 
-4. Check for OEM AV: list any third-party antivirus present.
+4. Check for OEM AV: list any third-party antivirus present (exclude Windows Defender).
    Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntivirusProduct |
+     Where-Object { $_.displayName -notmatch 'Windows Defender|Microsoft Defender' } |
      Select-Object displayName, productState
 
 5. Check OneDrive sync state:
@@ -46,8 +53,13 @@ Before any test steps, do these checks and report results:
      ForEach-Object { $_.UserFolder }
 
 6. Check if Mark-of-the-Web is applied:
-   Get-Content -Path ".\Setup-MikeBot.bat" -Stream Zone.Identifier -ErrorAction SilentlyContinue
-   If this returns content (a ZoneId), MotW is present — expected if files were browser-downloaded.
+   $stream = Get-Item -Path ".\Setup-MikeBot.bat" -Stream Zone.Identifier -ErrorAction SilentlyContinue
+   if ($stream) {
+       Get-Content -Path ".\Setup-MikeBot.bat" -Stream Zone.Identifier -ErrorAction SilentlyContinue
+   } else {
+       Write-Host "No Zone.Identifier stream — files are not Mark-of-the-Web flagged."
+   }
+   If content is returned (a ZoneId), MotW is present — expected if files were browser-downloaded.
 ```
 
 Report all six results. If anything is missing or unexpected, stop and ask me before proceeding.
@@ -62,7 +74,7 @@ For each step, I've labeled [Cursor] and [Shands] to show who does what. Capture
 
 **[Shands]** Download the four files via browser to this workspace. Right-click each .ps1 and .bat → Properties. Describe what you see under the General tab (is there a "This file came from another computer" block? An Unblock checkbox?). Double-click `Setup-MikeBot.bat`. Describe every dialog that appears before the PowerShell window opens. Specifically: does SmartScreen show a "Windows protected your PC" screen? Does it have a "More info" link? Does clicking it reveal a "Run anyway" button? Take screenshots if anything differs from what `README-FOR-MIKE.pdf` describes.
 
-**[Cursor]** After the PowerShell window opens, read the welcome text from the window (I'll describe it or screenshot it). Confirm it matches the structure in `Setup-MikeBot.ps1` lines ~295-330 (should show "WHAT IT WILL DO," "WHAT IT WILL NOT DO," "ABOUT YOUR FILES," "IF YOU NEED TO STOP," "IF SOMETHING GOES WRONG"). Note any discrepancies.
+**[Cursor]** After the PowerShell window opens, read the welcome text from the window (I'll describe it or screenshot it). Confirm it matches the welcome screen structure in `Setup-MikeBot.ps1` — search for "WHAT IT WILL DO" to find the welcome section. It should show these sections in order: "WHAT IT WILL DO," "WHAT IT WILL NOT DO," "ABOUT YOUR FILES," "IF YOU NEED TO STOP," "IF SOMETHING GOES WRONG." Note any discrepancies.
 
 ---
 
@@ -86,11 +98,11 @@ For each step, I've labeled [Cursor] and [Shands] to show who does what. Capture
 
 **[Shands]** Based on the pre-flight AV check, note which third-party AV is active (if any). During Stage 4 and Stage 9 (npm install), watch for: the PowerShell window closing unexpectedly, installs hanging with no progress for 5+ minutes, AV popups about script behavior or network access. If any of these happen, document which AV, which stage, and what the popup said. Do NOT disable AV without telling me first — I'll decide.
 
-**[Cursor]** Run this command periodically during Stage 4 to check if the script process is still alive:
+**[Cursor]** The elevated PowerShell from the .bat launcher runs under a different elevation context than this Cursor session. `Get-Process powershell` may return no results even when the script is running — that doesn't mean the script crashed. If the check returns empty, ask me to visually confirm the script window is still open before flagging anything. When the process is visible, run this periodically during Stage 4:
 ```
 Get-Process powershell -ErrorAction SilentlyContinue | Select-Object Id, StartTime
 ```
-If the PowerShell process disappears unexpectedly, flag it immediately.
+If the PowerShell process disappears unexpectedly AND I confirm the window is actually gone, flag it immediately.
 
 ---
 
@@ -100,7 +112,7 @@ If the PowerShell process disappears unexpectedly, flag it immediately.
 
 **[Shands]** Run through Stages 1-6 normally. In Stage 6, create a throwaway Telegram bot via BotFather and paste the token. Once you see "Telegram token saved" in green, close the PowerShell window immediately (click the X). Do not let the script reach Stage 7.
 
-**[Cursor]** After the window is closed, verify that the progress file was written. Run:
+**[Cursor]** Do not check the progress file until I explicitly say "window closed." After I confirm, verify that the progress file was written. Run:
 ```
 Get-Content "$env:LOCALAPPDATA\MikeBot-Setup\.progress"
 ```
@@ -110,7 +122,7 @@ It should contain `LAST_COMPLETED=6`. If it doesn't, or if the file doesn't exis
 
 **[Shands]** Double-click `Setup-MikeBot.bat` again. When the resume prompt appears, confirm it says "Welcome back… Resume from stage 7?" (not stage 6). Press Enter. Let Stage 7 run — paste the throwaway DeepSeek API key. The moment you see "DeepSeek key saved" in green, close the window immediately. Do not let it reach Stage 8.
 
-**[Cursor]** After the window is closed, check the progress file:
+**[Cursor]** Do not check the progress file until I explicitly say "window closed." After I confirm, verify:
 ```
 Get-Content "$env:LOCALAPPDATA\MikeBot-Setup\.progress"
 ```
@@ -153,15 +165,17 @@ Report the output. I'll combine this with my browser findings.
 
 ### Step 7 — Stage 10 onboarding TUI
 
-**[Shands]** During `openclaw onboard` (Stage 10): watch the TUI closely. Can you navigate with arrow keys? Do any prompts appear truncated or garbled? Does every wizard question match the cheat sheet printed by the script (lines ~930-955 of Setup-MikeBot.ps1)? If anything looks wrong, screenshot it. Complete the onboarding with throwaway credentials.
+**[Shands]** During `openclaw onboard` (Stage 10): watch the TUI closely. Can you navigate with arrow keys? Do any prompts appear truncated or garbled? Does every wizard question match the cheat sheet printed by the script (search `Setup-MikeBot.ps1` for "WIZARD ANSWERS" to find the expected prompts)? If anything looks wrong, screenshot it. Complete the onboarding with throwaway credentials. Say "onboarding complete" when done.
 
-**[Cursor]** Before onboarding starts, check:
+**[Cursor]** Before Stage 10 begins, check that OpenClaw is installed:
 ```
 Get-Command openclaw -ErrorAction SilentlyContinue
 openclaw --version
 ```
 
-After onboarding completes (or I report it's done), check the gateway is running:
+Then: during Stage 10's `openclaw onboard` TUI, do not send any commands to the terminal. The TUI is interactive — keystrokes from the wrong source can corrupt input. Wait for me to say "onboarding complete."
+
+After I confirm onboarding is complete, check the gateway:
 ```
 openclaw gateway status
 ```
@@ -175,26 +189,34 @@ openclaw logs --limit 20
 
 ### Step 8 — Stage 14 end-to-end with real Telegram
 
+**[Cursor]** Before I send the Telegram message, capture the current time as a filter marker:
+```
+$testStartTime = Get-Date
+Write-Host "Test marker: $($testStartTime.ToString('o'))"
+```
+
 **[Shands]** Open Telegram on your phone. Find the throwaway bot you created in Stage 6. Send the message: "What is 2 + 2?" Wait for a reply. If no reply in 30 seconds, tell me. When the script asks "Did the bot reply?" — answer y. Then the script will show log output and ask two verification questions. Answer based on what you actually see in the displayed lines (not based on whether the bot replied). Tell me what you answered and why.
 
 **[Cursor]** After I report my answers, run an independent log check to compare:
 ```
-$testTime = Get-Date
-# Pull recent logs
+# Filter to lines after the test marker
 $logs = openclaw logs --json --limit 100 --no-color 2>&1
 $tgCount = 0; $dsCount = 0
 foreach ($line in $logs) {
     if ($line -match '"type":"log"') {
         try { $entry = $line | ConvertFrom-Json } catch { continue }
-        if ($entry.time) { $entryTime = [DateTime]::Parse($entry.time) }
+        if ($entry.time) {
+            $entryTime = [DateTime]::Parse($entry.time)
+            if ($entryTime -lt $testStartTime) { continue }
+        }
         if ($entry.message) {
             if ($entry.message -match 'telegram') { $tgCount++ }
             if ($entry.message -match 'deepseek|api\.deepseek') { $dsCount++ }
         }
     }
 }
-Write-Host "Telegram mentions: $tgCount"
-Write-Host "DeepSeek mentions:  $dsCount"
+Write-Host "Telegram mentions (after marker): $tgCount"
+Write-Host "DeepSeek mentions (after marker):  $dsCount"
 ```
 
 Report the counts. If both are zero, flag it — the message may not have traveled the full path even if the bot replied.
@@ -203,9 +225,9 @@ Report the counts. If both are zero, flag it — the message may not have travel
 
 ### Step 9 — Diagnostic script post-setup
 
-**[Cursor]** Run the diagnostic script independently (not through the setup flow):
+**[Cursor]** Run the diagnostic script independently (not through the setup flow). Pipe an empty line to satisfy the final `Read-Host` so it doesn't hang:
 ```
-powershell -ExecutionPolicy Bypass -File ".\Setup-MikeBot-Diagnostic.ps1"
+echo. | powershell -ExecutionPolicy Bypass -File ".\Setup-MikeBot-Diagnostic.ps1" 2>&1
 ```
 
 Capture all output. Parse and report:
@@ -213,11 +235,13 @@ Capture all output. Parse and report:
 - Any line containing `[info]` — note them for awareness
 - Count of `[OK]` lines
 
-The script ends with `Read-Host "Press Enter to close"` — after capturing output, you may need to send Enter or kill the process. Don't interpret the results beyond flagging FAIL lines — I'll decide what matters.
+Don't interpret the results beyond flagging FAIL lines — I'll decide what matters.
 
 ---
 
 ### Step 10 — Reboot persistence
+
+**Note:** After the reboot, this Cursor session will end. I'll re-open this prompt in a new Cursor session. The running log at `test-run-log.md` preserves all state from Steps 1-9 — read it first in the new session to pick up where we left off.
 
 **[Shands]** Restart the laptop. After login, wait 2 minutes (the gateway's Scheduled Task or Startup-folder fallback needs time to fire). Do not open any setup windows. Then tell me you've rebooted and waited.
 
@@ -228,7 +252,7 @@ openclaw gateway status
 
 If the gateway is running, run the diagnostic again:
 ```
-powershell -ExecutionPolicy Bypass -File ".\Setup-MikeBot-Diagnostic.ps1"
+echo. | powershell -ExecutionPolicy Bypass -File ".\Setup-MikeBot-Diagnostic.ps1" 2>&1
 ```
 
 Capture output — specifically the "Gateway Port" and "Dashboard" sections.
@@ -260,6 +284,8 @@ Things that are NOT unexpected (don't stop for these):
 
 ## Output format
 
+**Important:** Append each step's result block to `test-run-log.md` in the workspace immediately after completing the step — do not keep results only in chat output. If this Cursor session restarts (e.g., after Step 10's reboot), the log file preserves all state.
+
 Maintain a running log as we go. After each step, append a block like this:
 
 ```
@@ -288,7 +314,7 @@ Flagged steps get a brief follow-up after the table: what was flagged, why, and 
 ## Before you start
 
 1. Read `test-plan.md` first — it's your primary reference for expected vs. failure behavior
-2. Read `Setup-MikeBot.ps1` lines ~295-330 (welcome screen text) and lines ~930-955 (wizard answers cheat sheet) so you know what to compare against
+2. Read the welcome screen section of `Setup-MikeBot.ps1` (search for "WHAT IT WILL DO") and the onboarding cheat sheet (search for "WIZARD ANSWERS") so you know what to compare against
 3. Confirm all four test files exist in the workspace
 4. Run the six pre-flight checks
 5. Report pre-flight results, then wait for my go-ahead on Step 1
