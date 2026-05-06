@@ -650,35 +650,49 @@ if (-not (Should-Skip 6)) {
 
     Wait-ForReturn "Press Enter once you've saved the token in Bitwarden..."
 
-    # Ask Mike to paste the token here so we can use it later
-    Write-Host ""
-    Write-Plain "Now paste the token here so I can use it in the next steps."
-    Write-Plain "(Right-click in this window to paste. The token won't be shown as you type.)"
-    Write-Host ""
-
+    # Telegram bot tokens are <numeric_id>:<alphanumeric + dash/underscore>.
+    # Validation is intentionally permissive — real validation happens when OpenClaw connects.
     $tgOk = $false
+    $tgAttempts = 0
     while (-not $tgOk) {
+        $tgAttempts++
         $secureToken = Read-Host "  Paste your Telegram bot token" -AsSecureString
         $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
         $token = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 
-        # Telegram tokens look like: <numeric_id>:<35-50 chars of letters/numbers/dashes/underscores>
-        if ($token -match '^\d+:[A-Za-z0-9_\-]{30,}$') {
+        if ($token -match '^\d+:[\w\-]+$') {
             Save-Secret -Key "TELEGRAM_BOT_TOKEN" -Value $token
             Write-Success "Telegram token saved for the rest of this setup."
-            $tgOk = $true
-        } elseif ($token -eq 'force') {
-            Write-Warn "Forcing acceptance — format doesn't match expected pattern."
-            Write-Warn "If this isn't actually your bot token, the rest of setup will fail."
-            Save-Secret -Key "TELEGRAM_BOT_TOKEN" -Value $token
             $tgOk = $true
         } else {
             Write-Fail "That doesn't look like a Telegram bot token."
             Write-Plain "  It should look like:  123456789:ABCdef-GHIjkl..."
-            Write-Plain "  If you're SURE this is the right token from BotFather,"
-            Write-Plain "  type 'force' (without quotes) to accept it anyway."
-            Write-Plain "  Otherwise, try pasting again."
+
+            if ($tgAttempts -ge 3) {
+                Write-Host ""
+                Write-Plain "  I keep rejecting your token. Three options:"
+                Write-Plain "    r) Try again with a different paste"
+                Write-Plain "    a) Accept this token anyway (use if you're sure it's correct"
+                Write-Plain "       and my validation is just being too strict)"
+                Write-Plain "    q) Quit and contact Shands"
+                Write-Host ""
+                $choice = Read-Host "  Choose (r/a/q)"
+                switch -Regex ($choice) {
+                    '^[Aa]' {
+                        Save-Secret -Key "TELEGRAM_BOT_TOKEN" -Value $token
+                        Write-Success "Telegram token accepted."
+                        $tgOk = $true
+                    }
+                    '^[Qq]' {
+                        Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                        exit 0
+                    }
+                    default { Write-Info "Retrying..." }
+                }
+            } else {
+                Write-Plain "  Try pasting again, or close and re-run if you need to find it again."
+            }
         }
     }
 
@@ -729,20 +743,48 @@ if (-not (Should-Skip 7)) {
     Write-Host ""
 
     $dsOk = $false
+    $dsAttempts = 0
+    # DeepSeek API keys start with 'sk-' followed by 16+ non-whitespace characters.
+    # Validation is intentionally permissive — real validation happens via the API test.
     while (-not $dsOk) {
+        $dsAttempts++
         $secureKey = Read-Host "  Paste your DeepSeek API key" -AsSecureString
         $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
         $key = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 
-        if ($key -match '^sk-[A-Za-z0-9]{20,}$') {
+        if ($key -match '^sk-\S{16,}$') {
             Save-Secret -Key "DEEPSEEK_API_KEY" -Value $key
             Write-Success "DeepSeek key saved."
             $dsOk = $true
         } else {
             Write-Fail "That doesn't look like a DeepSeek API key."
             Write-Plain "  It should start with 'sk-' followed by letters and numbers."
-            Write-Plain "  Try again, or get the key from Bitwarden if you saved it there."
+
+            if ($dsAttempts -ge 3) {
+                Write-Host ""
+                Write-Plain "  I keep rejecting your key. Three options:"
+                Write-Plain "    r) Try again with a different paste"
+                Write-Plain "    a) Accept this key anyway (use if you're sure it's correct"
+                Write-Plain "       and my validation is just being too strict)"
+                Write-Plain "    q) Quit and contact Shands"
+                Write-Host ""
+                $choice = Read-Host "  Choose (r/a/q)"
+                switch -Regex ($choice) {
+                    '^[Aa]' {
+                        Save-Secret -Key "DEEPSEEK_API_KEY" -Value $key
+                        Write-Success "DeepSeek key accepted."
+                        $dsOk = $true
+                    }
+                    '^[Qq]' {
+                        Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                        exit 0
+                    }
+                    default { Write-Info "Retrying..." }
+                }
+            } else {
+                Write-Plain "  Try again, or get the key from Bitwarden if you saved it there."
+            }
         }
     }
 
@@ -775,15 +817,23 @@ if (-not (Should-Skip 8)) {
                 "Authorization" = "Bearer $key"
                 "Content-Type"  = "application/json"
             }
+            # deepseek-v4-flash is the current default model.
+            # deepseek-chat was deprecated 2026-07-24 (maps to v4-flash non-thinking).
+            # See: https://api-docs.deepseek.com/
+            # thinking disabled so max_tokens=20 produces content, not just reasoning.
             $body = @{
-                model = "deepseek-chat"
+                model = "deepseek-v4-flash"
                 messages = @(
                     @{ role = "user"; content = "Reply with just the word: OK" }
                 )
-                max_tokens = 5
+                max_tokens = 20
+                thinking = @{ type = "disabled" }
             } | ConvertTo-Json -Depth 4
 
-            $resp = Invoke-RestMethod -Uri "https://api.deepseek.com/chat/completions" `
+            # /v1/chat/completions is the canonical OpenAI-compatible path.
+            # Both /v1/chat/completions and /chat/completions return 200;
+            # we use the /v1 form for forward compatibility with OpenAI SDKs.
+            $resp = Invoke-RestMethod -Uri "https://api.deepseek.com/v1/chat/completions" `
                 -Method Post -Headers $headers -Body $body -TimeoutSec 30 -ErrorAction Stop
 
             if ($resp.choices[0].message.content) {
@@ -919,23 +969,28 @@ if (-not (Should-Skip 10)) {
 
     Wait-ForReturn "Press Enter when ready to start the OpenClaw wizard..."
 
-    # Run onboarding with retry
+    # Run onboarding with retry.
+    # Using the call operator (&) instead of Start-Process -NoNewWindow because
+    # the latter can break interactive TUI rendering (arrow keys, prompts).
+    # Exit code is captured via $LASTEXITCODE.
     $obOk = Invoke-WithRetrySkipQuit -StepName "OpenClaw onboarding" -Action {
         try {
-            $proc = Start-Process -FilePath "openclaw" `
-                -ArgumentList "onboard", "--install-daemon" `
-                -Wait -PassThru -NoNewWindow
-            if ($proc.ExitCode -eq 0) {
+            & openclaw onboard --install-daemon
+            if ($LASTEXITCODE -eq 0) {
                 Write-Success "Onboarding complete."
                 return $true
             } else {
-                Write-Fail "Onboarding exited with code $($proc.ExitCode)."
-                if ($proc.ExitCode -eq 401 -or $proc.ExitCode -eq 1) {
-                    Write-Plain ""
-                    Write-Plain "  This often means the API key wasn't accepted."
-                    Write-Plain "  - Go back to platform.deepseek.com and verify the key"
-                    Write-Plain "  - Make sure your account has credits"
-                }
+                Write-Fail "Onboarding exited with code $LASTEXITCODE."
+                Write-Plain ""
+                Write-Plain "  Onboarding can fail for several reasons:"
+                Write-Plain "    - Network interruption during setup"
+                Write-Plain "    - API key issue (wrong key, expired, no credits)"
+                Write-Plain "    - Model not available on your account"
+                Write-Plain "    - Port conflict with another program"
+                Write-Plain ""
+                Write-Plain "  To diagnose: run Setup-MikeBot-Diagnostic.ps1"
+                Write-Plain "    (it's in the same folder as this script)"
+                Write-Plain "  Or text Shands with a screenshot of this window."
                 return $false
             }
         } catch {
