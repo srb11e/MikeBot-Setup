@@ -704,6 +704,7 @@ if (-not (Test-StageAlreadyComplete 6)) {
         if ($token -match '^\d+:[\w\-]+$') {
             Save-Secret -Key "TELEGRAM_BOT_TOKEN" -Value $token
             Write-Success "Telegram token saved for the rest of this setup."
+            Save-Progress 6
             $tgOk = $true
         } else {
             Write-Fail "That doesn't look like a Telegram bot token."
@@ -722,6 +723,7 @@ if (-not (Test-StageAlreadyComplete 6)) {
                     '^[Aa]' {
                         Save-Secret -Key "TELEGRAM_BOT_TOKEN" -Value $token
                         Write-Success "Telegram token accepted."
+                        Save-Progress 6
                         $tgOk = $true
                     }
                     '^[Qq]' {
@@ -733,10 +735,11 @@ if (-not (Test-StageAlreadyComplete 6)) {
             } else {
                 Write-Plain "  Try pasting again, or close and re-run if you need to find it again."
             }
-        }
     }
 
-    Save-Progress 6
+    # Save-Progress 6 was moved inside the loop — fires immediately on token save,
+    # closing the gap between key-saved and stage-block-end where a window-close
+    # could lose progress.
 }
 
 
@@ -796,6 +799,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
         if ($key -match '^sk-\S{16,}$') {
             Save-Secret -Key "DEEPSEEK_API_KEY" -Value $key
             Write-Success "DeepSeek key saved."
+            Save-Progress 7
             $dsOk = $true
         } else {
             Write-Fail "That doesn't look like a DeepSeek API key."
@@ -814,6 +818,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
                     '^[Aa]' {
                         Save-Secret -Key "DEEPSEEK_API_KEY" -Value $key
                         Write-Success "DeepSeek key accepted."
+                        Save-Progress 7
                         $dsOk = $true
                     }
                     '^[Qq]' {
@@ -828,7 +833,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
         }
     }
 
-    Save-Progress 7
+    # Save-Progress 7 was moved inside the loop — fires immediately on key save.
 }
 
 

@@ -57,6 +57,10 @@ This is a Shands-maintained project. Mike does not edit these files.
 5. Run `Setup-MikeBot-Diagnostic.ps1` and verify all checks pass on a healthy install
 6. Send a message from phone and confirm round-trip reply < 15 seconds
 
+## Troubleshooting
+
+- **Bot stops replying after working initially:** Your DeepSeek credits may have run out. New accounts get free credits that cover hundreds of conversations, but when exhausted the bot silently fails. Check at platform.deepseek.com → Billing to see your balance and add credits if needed.
+
 ## Files Not Tracked
 
 - `*.pdf` — the user-facing README PDF is versioned separately or regenerated from the markdown
