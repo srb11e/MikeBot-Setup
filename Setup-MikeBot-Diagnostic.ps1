@@ -121,7 +121,7 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
         $deep = & openclaw status --deep 2>&1
         Note "Deep status:"
         $deep | Select-Object -First 15 | ForEach-Object { Plain "    $_" }
-    } catch { }
+    } catch { $null }
 
     # Config peek (don't print sensitive values)
     try {
@@ -131,7 +131,7 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
         } else {
             Bad "Gateway auth token missing."
         }
-    } catch { }
+    } catch { $null }
 
     # Telegram bot token check (won't print the value)
     try {

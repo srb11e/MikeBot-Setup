@@ -214,10 +214,10 @@ function Install-WithWinget {
     )
     Write-Info "Installing $DisplayName (this may take a few minutes -- silence is normal)..."
 
-    $args = @("install", "--id", $PackageId, "--exact",
-              "--silent", "--accept-source-agreements", "--accept-package-agreements")
+    $wingetArgs = @("install", "--id", $PackageId, "--exact",
+                    "--silent", "--accept-source-agreements", "--accept-package-agreements")
 
-    $proc = Start-Process -FilePath "winget" -ArgumentList $args -Wait -PassThru -NoNewWindow
+    $proc = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
     $code = $proc.ExitCode
 
     # Success (0) or already-installed codes
@@ -572,7 +572,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
     # mid-install failure.
     Write-Info "Verifying package IDs are current..."
     foreach ($pkg in $installs) {
-        $searchResult = & winget search --id $pkg.Id --exact 2>&1
+        $null = & winget search --id $pkg.Id --exact 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "The package ID for '$($pkg.Name)' has changed or is no longer available."
             Write-Plain "  Expected ID: $($pkg.Id)"
@@ -586,7 +586,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
     Write-Host ""
 
     foreach ($pkg in $installs) {
-        $stepResult = Invoke-WithRetrySkipQuit -StepName "Installing $($pkg.Name)" -Action {
+        $null = Invoke-WithRetrySkipQuit -StepName "Installing $($pkg.Name)" -Action {
             return (Install-WithWinget -PackageId $pkg.Id -DisplayName $pkg.Name)
         }
     }
@@ -637,7 +637,7 @@ if (-not (Test-StageAlreadyComplete 5)) {
         Write-Info "Skipping Bitwarden install (you have another password manager)."
         Write-Warn "Make sure you have somewhere safe to put your API keys before continuing."
     } else {
-        $bwOk = Invoke-WithRetrySkipQuit -StepName "Installing Bitwarden" -Action {
+        $null = Invoke-WithRetrySkipQuit -StepName "Installing Bitwarden" -Action {
             return (Install-WithWinget -PackageId "Bitwarden.Bitwarden" -DisplayName "Bitwarden")
         }
 
@@ -856,7 +856,7 @@ if (-not (Test-StageAlreadyComplete 8)) {
         exit 1
     }
 
-    $testResult = Invoke-WithRetrySkipQuit -StepName "Testing DeepSeek API key" -Action {
+    $null = Invoke-WithRetrySkipQuit -StepName "Testing DeepSeek API key" -Action {
         try {
             Write-Info "Sending a test message to DeepSeek..."
             $headers = @{
@@ -925,7 +925,7 @@ if (-not (Test-StageAlreadyComplete 9)) {
     Update-EnvironmentPath
     Assert-ToolAvailable -Name "node" -FriendlyName "Node.js" -NextStage "Stage 9 (Install OpenClaw)"
 
-    $installOk = Invoke-WithRetrySkipQuit -StepName "Installing OpenClaw" -Action {
+    $null = Invoke-WithRetrySkipQuit -StepName "Installing OpenClaw" -Action {
         try {
             Write-Info "Installing OpenClaw via npm (this can take 5-10 minutes)..."
             $proc = Start-Process -FilePath "npm" `
@@ -1011,7 +1011,7 @@ if (-not (Test-StageAlreadyComplete 10)) {
     # Using the call operator (&) instead of Start-Process -NoNewWindow because
     # the latter can break interactive TUI rendering (arrow keys, prompts).
     # Exit code is captured via $LASTEXITCODE.
-    $obOk = Invoke-WithRetrySkipQuit -StepName "OpenClaw onboarding" -Action {
+    $null = Invoke-WithRetrySkipQuit -StepName "OpenClaw onboarding" -Action {
         try {
             & openclaw onboard --install-daemon
             if ($LASTEXITCODE -eq 0) {
@@ -1262,7 +1262,6 @@ if (-not (Test-StageAlreadyComplete 14)) {
             Write-Info "Checking the bot's logs to confirm the message traveled the full path..."
             Write-Host ""
 
-            $logConfirmed = $false
             try {
                 $logOutput = & openclaw logs --json --limit 100 --no-color 2>&1
                 $telegramLines = @()
@@ -1283,9 +1282,7 @@ if (-not (Test-StageAlreadyComplete 14)) {
                         if ($msg -match 'deepseek|api\.deepseek') {
                             $deepseekLines += $msg
                         }
-                    } catch {
-                        # Skip lines that aren't valid JSON
-                    }
+                    } catch { $null }
                 }
 
                 # Show Mike what we found so he can verify, not search.
@@ -1316,7 +1313,6 @@ if (-not (Test-StageAlreadyComplete 14)) {
 
                 if (($tgSeen -match '^[Yy]') -and ($dsSeen -match '^[Yy]')) {
                     Write-Success "Logs confirm the message traveled the full path: Telegram -> DeepSeek -> Telegram."
-                    $logConfirmed = $true
                     $testOk = $true
                 } else {
                     Write-Warn "The logs don't clearly show the full message path."
