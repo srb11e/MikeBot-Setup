@@ -97,7 +97,7 @@ TIMESTAMP=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')
     $Script:LastCompleted = $StageNum
 }
 
-function Load-Progress {
+function Import-Progress {
     if (Test-Path $ProgressFile) {
         $line = (Get-Content $ProgressFile | Where-Object { $_ -match '^LAST_COMPLETED=' } | Select-Object -First 1)
         if ($line -match '^LAST_COMPLETED=(\d+)$') {
@@ -109,7 +109,7 @@ function Load-Progress {
     }
 }
 
-function Should-Skip {
+function Test-StageAlreadyComplete {
     param([int]$StageNum)
     return ($StageNum -le $Script:LastCompleted)
 }
@@ -163,7 +163,7 @@ function Test-CommandExists {
     return ($null -ne $cmd)
 }
 
-function Refresh-EnvironmentPath {
+function Update-EnvironmentPath {
     # Pulls the latest PATH from registry so newly-installed tools become visible.
     # winget installs add to PATH but the change doesn't reach the running process.
     # Called after every install stage and at resume.
@@ -184,7 +184,7 @@ function Assert-ToolAvailable {
     # One retry after a short pause — PATH updates can race winget's post-install hooks.
     Write-Info "$FriendlyName not found in PATH yet. Waiting a moment and retrying..."
     Start-Sleep -Seconds 5
-    Refresh-EnvironmentPath
+    Update-EnvironmentPath
     if (Test-CommandExists $Name) {
         return $true
     }
@@ -200,10 +200,12 @@ function Assert-ToolAvailable {
 # -----------------------------------------------------------------------------
 # WINGET INSTALL HELPER
 # -----------------------------------------------------------------------------
-# winget exit codes:
+# winget exit codes (canonical, from Microsoft winget-cli returnCodes.md):
 #   0           = success
-#   -1978335189 = already installed (treat as success)
-#   anything else = real failure
+#   -1978335189 = APPINSTALLER_CLI_ERROR_NO_APPLICABLE_UPGRADE (already up to date)
+#   -1978335206 = APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED
+# Both non-zero codes mean "package already present" — treat as success.
+# All other codes = real failure.
 
 function Install-WithWinget {
     param(
@@ -218,11 +220,10 @@ function Install-WithWinget {
     $proc = Start-Process -FilePath "winget" -ArgumentList $args -Wait -PassThru -NoNewWindow
     $code = $proc.ExitCode
 
-    if ($code -eq 0) {
-        Write-Success "$DisplayName installed."
-        return $true
-    } elseif ($code -eq -1978335189) {
-        Write-Success "$DisplayName already installed."
+    # Success (0) or already-installed codes
+    $alreadyInstalled = @(0, -1978335189, -1978335206)
+    if ($code -in $alreadyInstalled) {
+        Write-Success "$DisplayName installed (or already present)."
         return $true
     } else {
         Write-Fail "$DisplayName install failed (winget exit code $code)."
@@ -288,22 +289,6 @@ function Invoke-WithRetrySkipQuit {
     }
 }
 
-# -----------------------------------------------------------------------------
-# CTRL+C HANDLER
-# -----------------------------------------------------------------------------
-# PowerShell handles Ctrl+C by raising a PipelineStoppedException. We register
-# an exit handler that runs no matter how the script ends.
-
-$ExitHandler = {
-    if ($Script:LastCompleted -gt 0 -and $Script:LastCompleted -lt $Script:TotalStages) {
-        Write-Host ""
-        Write-Host "  [!] Setup interrupted. Progress saved through stage $($Script:LastCompleted)." -ForegroundColor Yellow
-        Write-Host "  Double-click Setup-MikeBot.bat to resume from where you left off." -ForegroundColor Yellow
-        Write-Host ""
-    }
-}
-Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action $ExitHandler | Out-Null
-
 
 # =============================================================================
 # WELCOME
@@ -336,8 +321,8 @@ Write-Plain "    - Setup files (including any keys you paste) are stored in a"
 Write-Plain "      non-synced folder on this PC — not in OneDrive or the cloud."
 Write-Host ""
 Write-Bold "  IF YOU NEED TO STOP:"
-Write-Plain "    - Close this window any time. Your progress is saved."
-Write-Plain "    - Double-click Setup-MikeBot.bat again to resume."
+Write-Plain "    - Close this window any time — your progress is saved."
+Write-Plain "    - Double-click Setup-MikeBot.bat again to resume where you left off."
 Write-Host ""
 Write-Bold "  IF SOMETHING GOES WRONG:"
 Write-Plain "    - Don't panic. Take a screenshot and text Shands."
@@ -367,7 +352,7 @@ try {
 # -----------------------------------------------------------------------------
 # Resume check
 # -----------------------------------------------------------------------------
-Load-Progress
+Import-Progress
 
 $StageNames = @(
     "",
@@ -414,14 +399,14 @@ if ($Script:LastCompleted -gt 0 -and $Script:LastCompleted -lt $Script:TotalStag
 }
 
 # Pick up any tools installed on a previous run that aren't in this shell's PATH yet.
-Refresh-EnvironmentPath
+Update-EnvironmentPath
 
 
 # =============================================================================
 # STAGE 1: Windows Version Check
 # =============================================================================
 
-if (-not (Should-Skip 1)) {
+if (-not (Test-StageAlreadyComplete 1)) {
     Show-StageHeader 1 $Script:TotalStages "Windows Version Check"
 
     Write-Plain "Checking that your Windows is new enough for OpenClaw."
@@ -454,7 +439,7 @@ if (-not (Should-Skip 1)) {
 # STAGE 2: Windows Update
 # =============================================================================
 
-if (-not (Should-Skip 2)) {
+if (-not (Test-StageAlreadyComplete 2)) {
     Show-StageHeader 2 $Script:TotalStages "Windows Update"
 
     Write-Plain "Before we install anything, let's make sure Windows is up to date."
@@ -485,7 +470,7 @@ if (-not (Should-Skip 2)) {
 # STAGE 3: Security Basics
 # =============================================================================
 
-if (-not (Should-Skip 3)) {
+if (-not (Test-StageAlreadyComplete 3)) {
     Show-StageHeader 3 $Script:TotalStages "Security Basics"
 
     Write-Plain "This laptop will store an API key that costs real money if someone"
@@ -553,7 +538,7 @@ if (-not (Should-Skip 3)) {
 # STAGE 4: Install Foundation Tools (winget batch)
 # =============================================================================
 
-if (-not (Should-Skip 4)) {
+if (-not (Test-StageAlreadyComplete 4)) {
     Show-StageHeader 4 $Script:TotalStages "Install Foundation Tools"
 
     Write-Plain "Installing the tools the bot needs:"
@@ -581,6 +566,25 @@ if (-not (Should-Skip 4)) {
         @{ Id = "Telegram.TelegramDesktop"; Name = "Telegram Desktop" }
     )
 
+    # Pre-flight: verify each package ID is still valid before installing.
+    # If a package has been renamed or removed from winget, failing here
+    # gives Mike a clean "contact Shands" path instead of a cryptic
+    # mid-install failure.
+    Write-Info "Verifying package IDs are current..."
+    foreach ($pkg in $installs) {
+        $searchResult = & winget search --id $pkg.Id --exact 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "The package ID for '$($pkg.Name)' has changed or is no longer available."
+            Write-Plain "  Expected ID: $($pkg.Id)"
+            Write-Plain "  This means Microsoft's package registry has changed since the script was written."
+            Write-Plain "  Please contact Shands before continuing — do not try to work around this."
+            Wait-ForReturn "Press Enter to exit..."
+            exit 1
+        }
+    }
+    Write-Success "All package IDs confirmed."
+    Write-Host ""
+
     foreach ($pkg in $installs) {
         $stepResult = Invoke-WithRetrySkipQuit -StepName "Installing $($pkg.Name)" -Action {
             return (Install-WithWinget -PackageId $pkg.Id -DisplayName $pkg.Name)
@@ -588,7 +592,7 @@ if (-not (Should-Skip 4)) {
     }
 
     # Pick up the new tools without restarting the shell
-    Refresh-EnvironmentPath
+    Update-EnvironmentPath
 
     Write-Host ""
     Write-Info "Verifying installs..."
@@ -622,7 +626,7 @@ if (-not (Should-Skip 4)) {
 # STAGE 5: Install Bitwarden (Password Manager)
 # =============================================================================
 
-if (-not (Should-Skip 5)) {
+if (-not (Test-StageAlreadyComplete 5)) {
     Show-StageHeader 5 $Script:TotalStages "Install Bitwarden (Password Manager)"
 
     Write-Plain "Before you create API keys, you need somewhere safe to keep them."
@@ -657,7 +661,7 @@ if (-not (Should-Skip 5)) {
 # STAGE 6: Create Telegram Bot (BEFORE OpenClaw onboarding so token is ready)
 # =============================================================================
 
-if (-not (Should-Skip 6)) {
+if (-not (Test-StageAlreadyComplete 6)) {
     Show-StageHeader 6 $Script:TotalStages "Create Telegram Bot"
 
     Write-Plain "Now we'll create your bot's identity in Telegram."
@@ -740,7 +744,7 @@ if (-not (Should-Skip 6)) {
 # STAGE 7: Create DeepSeek Account & API Key
 # =============================================================================
 
-if (-not (Should-Skip 7)) {
+if (-not (Test-StageAlreadyComplete 7)) {
     Show-StageHeader 7 $Script:TotalStages "Create DeepSeek Account & API Key"
 
     Write-Plain "DeepSeek is the AI model that will power your bot. It's about 10x cheaper"
@@ -832,7 +836,7 @@ if (-not (Should-Skip 7)) {
 # STAGE 8: Test the API Key
 # =============================================================================
 
-if (-not (Should-Skip 8)) {
+if (-not (Test-StageAlreadyComplete 8)) {
     Show-StageHeader 8 $Script:TotalStages "Test the API Key"
 
     Write-Plain "Before we set up OpenClaw, let's confirm your DeepSeek key actually works."
@@ -904,7 +908,7 @@ if (-not (Should-Skip 8)) {
 # STAGE 9: Install OpenClaw
 # =============================================================================
 
-if (-not (Should-Skip 9)) {
+if (-not (Test-StageAlreadyComplete 9)) {
     Show-StageHeader 9 $Script:TotalStages "Install OpenClaw"
 
     Write-Plain "Now we install OpenClaw itself. This is the AI assistant that runs on"
@@ -912,7 +916,7 @@ if (-not (Should-Skip 9)) {
     Write-Host ""
 
     # Make sure node is in PATH from Stage 4
-    Refresh-EnvironmentPath
+    Update-EnvironmentPath
     Assert-ToolAvailable -Name "node" -FriendlyName "Node.js" -NextStage "Stage 9 (Install OpenClaw)"
 
     $installOk = Invoke-WithRetrySkipQuit -StepName "Installing OpenClaw" -Action {
@@ -922,7 +926,7 @@ if (-not (Should-Skip 9)) {
                 -ArgumentList "install", "-g", "openclaw" `
                 -Wait -PassThru -NoNewWindow
             if ($proc.ExitCode -eq 0) {
-                Refresh-EnvironmentPath
+                Update-EnvironmentPath
                 if (Test-CommandExists "openclaw") {
                     $ver = & openclaw --version 2>$null
                     Write-Success "OpenClaw installed: $ver"
@@ -951,7 +955,7 @@ if (-not (Should-Skip 9)) {
 # STAGE 10: OpenClaw Onboarding
 # =============================================================================
 
-if (-not (Should-Skip 10)) {
+if (-not (Test-StageAlreadyComplete 10)) {
     Show-StageHeader 10 $Script:TotalStages "OpenClaw Onboarding"
 
     Write-Plain "OpenClaw has its own setup wizard that asks you a series of questions."
@@ -1035,7 +1039,7 @@ if (-not (Should-Skip 10)) {
 # STAGE 11: Gateway Health Check
 # =============================================================================
 
-if (-not (Should-Skip 11)) {
+if (-not (Test-StageAlreadyComplete 11)) {
     Show-StageHeader 11 $Script:TotalStages "Gateway Health Check"
 
     Write-Plain "Checking that the OpenClaw gateway (the brain of the bot) is running..."
@@ -1082,7 +1086,7 @@ if (-not (Should-Skip 11)) {
 # STAGE 12: Dashboard Check
 # =============================================================================
 
-if (-not (Should-Skip 12)) {
+if (-not (Test-StageAlreadyComplete 12)) {
     Show-StageHeader 12 $Script:TotalStages "Dashboard Check"
 
     Write-Plain "OpenClaw has a web dashboard you can open in your browser."
@@ -1145,7 +1149,7 @@ if (-not (Should-Skip 12)) {
 # STAGE 13: Approve Your Phone with the Bot
 # =============================================================================
 
-if (-not (Should-Skip 13)) {
+if (-not (Test-StageAlreadyComplete 13)) {
     Show-StageHeader 13 $Script:TotalStages "Approve Your Phone with the Bot"
 
     Write-Plain "OpenClaw doesn't let just anyone message your bot — you have to approve"
@@ -1222,7 +1226,7 @@ if (-not (Should-Skip 13)) {
 # STAGE 14: End-to-End Test
 # =============================================================================
 
-if (-not (Should-Skip 14)) {
+if (-not (Test-StageAlreadyComplete 14)) {
     Show-StageHeader 14 $Script:TotalStages "End-to-End Test"
 
     Write-Plain "Moment of truth. Send your bot a real message from Telegram."
@@ -1254,7 +1258,7 @@ if (-not (Should-Skip 14)) {
 
             $logConfirmed = $false
             try {
-                $logOutput = & openclaw logs --json --limit 30 --no-color 2>&1
+                $logOutput = & openclaw logs --json --limit 100 --no-color 2>&1
                 $telegramLines = @()
                 $deepseekLines = @()
 

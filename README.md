@@ -60,3 +60,28 @@ This is a Shands-maintained project. Mike does not edit these files.
 ## Files Not Tracked
 
 - `*.pdf` — the user-facing README PDF is versioned separately or regenerated from the markdown
+
+## Known Limitations / Accepted Risks (Phase 4)
+
+These were flagged in the red-team audit and consciously accepted or deferred:
+
+- **A4.1 — Bracketed-paste mode may truncate tokens.** Rare on modern terminals. The loosened validation regex (F1.3) and the API test step catch truncated tokens. Mitigation cost exceeds expected harm.
+- **A4.2 — Telegram bot privacy settings.** Deferred to a manual post-setup step: once the bot works, send `/setprivacy` to BotFather, select the bot, set to "Disable." This prevents the bot from seeing all group messages.
+- **A4.3 — Supply-chain trust on `npm install -g openclaw`.** Accepting risk. Pinning a specific version creates maintenance burden. Mike isn't typing the package name — the script is. Canonical package name confirmed in V0.1.
+- **A4.4 — Corporate/managed Windows machines.** Deferred. If Mike's laptop is corporate-managed (MDM, group policy, AV exclusions), the script will fail visibly and Shands can intervene. Pre-detection would require extensive policy enumeration — out of scope.
+- **A4.5 — Original .bat window stays open during UAC re-launch.** Accept. Cosmetic only on slow systems.
+
+## Uninstall
+
+If Mike wants to remove this setup, here is what was installed and how to remove it:
+
+| Component | How to Remove |
+|-----------|---------------|
+| OpenClaw | `npm uninstall -g openclaw` then delete `%USERPROFILE%\.openclaw\` |
+| Node.js | Windows Settings → Apps → Uninstall "Node.js" |
+| Git | Windows Settings → Apps → Uninstall "Git" |
+| Bitwarden | Windows Settings → Apps → Uninstall "Bitwarden" |
+| Telegram Desktop | Windows Settings → Apps → Uninstall "Telegram Desktop" |
+| Setup files | Delete `%LOCALAPPDATA%\MikeBot-Setup\` |
+| Bot (Telegram) | Send `/deletebot` to BotFather and confirm |
+| DeepSeek account | Log in at platform.deepseek.com → Account → Delete Account |
