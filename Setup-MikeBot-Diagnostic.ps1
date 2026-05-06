@@ -4,7 +4,7 @@
 #
 # PURPOSE:
 #   Standalone diagnostic. Mike (or Shands) runs this when something seems
-#   broken. It only READS — it never installs, modifies, or fixes anything.
+#   broken. It only READS -- it never installs, modifies, or fixes anything.
 #   Output is suitable for pasting into a text message to Shands.
 #
 # HOW TO RUN:
@@ -16,7 +16,7 @@
 #       powershell -ExecutionPolicy Bypass -File .\Setup-MikeBot-Diagnostic.ps1
 # =============================================================================
 
-$ErrorActionPreference = "Continue"  # don't bail on errors — we want to keep checking
+$ErrorActionPreference = "Continue"  # don't bail on errors -- we want to keep checking
 
 function Section { param([string]$t) Write-Host ""; Write-Host "=== $t ===" -ForegroundColor Cyan }
 function OK    { param([string]$m) Write-Host "  [OK]   $m" -ForegroundColor Green }
@@ -26,7 +26,7 @@ function Plain { param([string]$m) Write-Host "  $m" }
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor White
-Write-Host "  Mike's Bot — Diagnostic Report" -ForegroundColor White
+Write-Host "  Mike's Bot -- Diagnostic Report" -ForegroundColor White
 Write-Host "  Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor White
 Write-Host "================================================================" -ForegroundColor White
 
@@ -39,7 +39,7 @@ $os = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Err
 if ($os) {
     Plain "Windows:     $($os.ProductName) build $([System.Environment]::OSVersion.Version.Build) (version $($os.DisplayVersion))"
     if ([System.Environment]::OSVersion.Version.Build -lt 19041) {
-        Bad "Windows build is below 19041 — OpenClaw needs newer."
+        Bad "Windows build is below 19041 -- OpenClaw needs newer."
     } else {
         OK "Windows version is supported."
     }
@@ -139,19 +139,19 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
         if ($tgToken -and $tgToken -ne "null" -and $tgToken.Length -gt 10) {
             OK "Telegram bot token is set."
         } else {
-            Bad "Telegram bot token missing — bot cannot receive messages."
+            Bad "Telegram bot token missing -- bot cannot receive messages."
         }
     } catch {
         Note "Couldn't check Telegram bot token: $($_.Exception.Message)"
     }
 } else {
-    Bad "openclaw command not available — skipping OpenClaw checks."
+    Bad "openclaw command not available -- skipping OpenClaw checks."
 }
 
 # -----------------------------------------------------------------------------
 Section "Gateway Port (18789)"
 # -----------------------------------------------------------------------------
-# Raw .NET socket test instead of Test-NetConnection — faster and avoids
+# Raw .NET socket test instead of Test-NetConnection -- faster and avoids
 # spurious warnings on locked-down machines.
 try {
     $client = New-Object System.Net.Sockets.TcpClient
@@ -162,7 +162,7 @@ try {
         OK "Port 18789 is listening on localhost."
     } else {
         $client.Close()
-        Bad "Port 18789 is NOT listening — gateway probably isn't running."
+        Bad "Port 18789 is NOT listening -- gateway probably isn't running."
     }
 } catch {
     Note "Couldn't test port 18789: $($_.Exception.Message)"
@@ -202,7 +202,7 @@ $ocConfig = Join-Path $env:USERPROFILE ".openclaw"
 if (Test-Path $ocConfig) {
     OK "OpenClaw config folder exists: $ocConfig"
 } else {
-    Bad "OpenClaw config folder missing — onboarding may not have completed."
+    Bad "OpenClaw config folder missing -- onboarding may not have completed."
 }
 
 # -----------------------------------------------------------------------------

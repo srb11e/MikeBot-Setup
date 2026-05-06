@@ -1,5 +1,5 @@
 # =============================================================================
-# Setup-MikeBot.ps1 — OpenClaw + DeepSeek + Telegram setup for Windows
+# Setup-MikeBot.ps1 -- OpenClaw + DeepSeek + Telegram setup for Windows
 # =============================================================================
 #
 # PURPOSE:
@@ -75,7 +75,7 @@ function Test-UserChoseSkip {
 # Use LOCALAPPDATA instead of USERPROFILE to avoid OneDrive sync.
 # On corporate-managed laptops, USERPROFILE (including Desktop and Documents)
 # is often inside a OneDrive-synced folder. LOCALAPPDATA is by Windows
-# convention not roamed and not synced by OneDrive — so secrets stored here
+# convention not roamed and not synced by OneDrive -- so secrets stored here
 # during setup won't leak to cloud storage.
 $ProgressDir  = Join-Path $env:LOCALAPPDATA "MikeBot-Setup"
 $ProgressFile = Join-Path $ProgressDir   ".progress"
@@ -181,7 +181,7 @@ function Assert-ToolAvailable {
     if (Test-CommandExists $Name) {
         return $true
     }
-    # One retry after a short pause — PATH updates can race winget's post-install hooks.
+    # One retry after a short pause -- PATH updates can race winget's post-install hooks.
     Write-Info "$FriendlyName not found in PATH yet. Waiting a moment and retrying..."
     Start-Sleep -Seconds 5
     Update-EnvironmentPath
@@ -191,7 +191,7 @@ function Assert-ToolAvailable {
     Write-Warn "$FriendlyName still not available."
     Write-Plain ""
     Write-Plain "  Close this window, then double-click Setup-MikeBot.bat again."
-    Write-Plain "  Your progress is saved — it will resume from $NextStage."
+    Write-Plain "  Your progress is saved -- it will resume from $NextStage."
     Write-Plain ""
     Wait-ForReturn "Press Enter to close..."
     exit 0
@@ -204,7 +204,7 @@ function Assert-ToolAvailable {
 #   0           = success
 #   -1978335189 = APPINSTALLER_CLI_ERROR_NO_APPLICABLE_UPGRADE (already up to date)
 #   -1978335206 = APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED
-# Both non-zero codes mean "package already present" — treat as success.
+# Both non-zero codes mean "package already present" -- treat as success.
 # All other codes = real failure.
 
 function Install-WithWinget {
@@ -212,7 +212,7 @@ function Install-WithWinget {
         [string]$PackageId,
         [string]$DisplayName
     )
-    Write-Info "Installing $DisplayName (this may take a few minutes — silence is normal)..."
+    Write-Info "Installing $DisplayName (this may take a few minutes -- silence is normal)..."
 
     $args = @("install", "--id", $PackageId, "--exact",
               "--silent", "--accept-source-agreements", "--accept-package-agreements")
@@ -262,7 +262,7 @@ function Invoke-WithRetrySkipQuit {
             Write-Plain "    r) Retry this step"
         }
         Write-Plain "    s) Skip and continue to the next step"
-        Write-Plain "    q) Quit (your progress is saved — you can resume later)"
+        Write-Plain "    q) Quit (your progress is saved -- you can resume later)"
         Write-Host ""
         $choice = Read-Host "  Choose ($(if (-not $capped) {'r/'})s/q)"
         switch -Regex ($choice) {
@@ -318,10 +318,10 @@ Write-Plain "    - Send any data anywhere except DeepSeek's API and Telegram"
 Write-Host ""
 Write-Bold "  ABOUT YOUR FILES:"
 Write-Plain "    - Setup files (including any keys you paste) are stored in a"
-Write-Plain "      non-synced folder on this PC — not in OneDrive or the cloud."
+Write-Plain "      non-synced folder on this PC -- not in OneDrive or the cloud."
 Write-Host ""
 Write-Bold "  IF YOU NEED TO STOP:"
-Write-Plain "    - Close this window any time — your progress is saved."
+Write-Plain "    - Close this window any time -- your progress is saved."
 Write-Plain "    - Double-click Setup-MikeBot.bat again to resume where you left off."
 Write-Host ""
 Write-Bold "  IF SOMETHING GOES WRONG:"
@@ -378,7 +378,7 @@ if ($Script:LastCompleted -gt 0 -and $Script:LastCompleted -lt $Script:TotalStag
     $nextName = $StageNames[$next]
     Write-Host ""
     Write-Info "Welcome back, Mike. Last time you got through stage $($Script:LastCompleted)."
-    Write-Plain "Next up: Stage $next — $nextName"
+    Write-Plain "Next up: Stage $next -- $nextName"
     Write-Host ""
     $resumeChoice = Read-Host "  Resume from stage $next ? (Enter = resume, n = start over)"
     if ($resumeChoice -match '^[Nn]') {
@@ -477,7 +477,7 @@ if (-not (Test-StageAlreadyComplete 3)) {
     Write-Plain "else gets it. Let's lock it down. Three things, takes about 5 minutes."
 
     if (Test-UserChoseSkip) {
-        Write-Info "Skipping security setup (do this later — text Shands if unsure)."
+        Write-Info "Skipping security setup (do this later -- text Shands if unsure)."
     } else {
         Write-Host ""
         Write-Bold "  1. SCREEN LOCK"
@@ -503,21 +503,21 @@ if (-not (Test-StageAlreadyComplete 3)) {
             powercfg /change standby-timeout-ac 0   2>&1 | Out-Null
             powercfg /change hibernate-timeout-ac 0 2>&1 | Out-Null
             powercfg /change disk-timeout-ac 0      2>&1 | Out-Null
-            # Display can still turn off — that's fine, doesn't affect the bot
+            # Display can still turn off -- that's fine, doesn't affect the bot
             Write-Success "Power settings adjusted: laptop won't sleep when plugged in."
-            Write-Plain "  (The screen can still turn off — that's fine.)"
+            Write-Plain "  (The screen can still turn off -- that's fine.)"
         } catch {
             Write-Warn "Couldn't adjust power settings automatically."
             Write-Plain "  You can do it manually later: Settings -> System -> Power & Battery"
         }
 
         Write-Host ""
-        Write-Bold "  3. BITLOCKER (disk encryption — RECOMMENDED but optional)"
+        Write-Bold "  3. BITLOCKER (disk encryption -- RECOMMENDED but optional)"
         Write-Plain "     This encrypts your hard drive so if someone steals the laptop"
         Write-Plain "     they can't read your API key off the disk."
         Write-Host ""
         Write-Plain "     If your laptop already has BitLocker on (most newer business"
-        Write-Plain "     laptops do), you're good — skip this."
+        Write-Plain "     laptops do), you're good -- skip this."
         Write-Host ""
         Write-Plain "     To check or turn on: Control Panel -> BitLocker Drive Encryption"
         Write-Plain "     If you turn it on, SAVE THE RECOVERY KEY somewhere safe"
@@ -542,7 +542,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
     Show-StageHeader 4 $Script:TotalStages "Install Foundation Tools"
 
     Write-Plain "Installing the tools the bot needs:"
-    Write-Plain "  - Git (version control — required by OpenClaw's installer)"
+    Write-Plain "  - Git (version control -- required by OpenClaw's installer)"
     Write-Plain "  - Node.js 22 LTS (the runtime OpenClaw runs on)"
     Write-Plain "  - Telegram Desktop (so you can chat with the bot from this laptop too)"
     Write-Host ""
@@ -577,7 +577,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
             Write-Fail "The package ID for '$($pkg.Name)' has changed or is no longer available."
             Write-Plain "  Expected ID: $($pkg.Id)"
             Write-Plain "  This means Microsoft's package registry has changed since the script was written."
-            Write-Plain "  Please contact Shands before continuing — do not try to work around this."
+            Write-Plain "  Please contact Shands before continuing -- do not try to work around this."
             Wait-ForReturn "Press Enter to exit..."
             exit 1
         }
@@ -596,14 +596,14 @@ if (-not (Test-StageAlreadyComplete 4)) {
 
     Write-Host ""
     Write-Info "Verifying installs..."
-    if (Test-CommandExists "git")  { Write-Success "git is available."  } else { Write-Warn "git not found in PATH yet — may need a restart." }
+    if (Test-CommandExists "git")  { Write-Success "git is available."  } else { Write-Warn "git not found in PATH yet -- may need a restart." }
     if (Test-CommandExists "node") {
         $nodeVer = & node --version 2>$null
         Write-Success "node is available ($nodeVer)."
     } else {
         Write-Warn "node not found in PATH yet."
         Write-Plain ""
-        Write-Plain "  This is common — the PATH changes haven't reached this window yet."
+        Write-Plain "  This is common -- the PATH changes haven't reached this window yet."
         Write-Plain "  I can restart this script automatically. You won't lose progress."
         Write-Host ""
         $restartChoice = Read-Host "  Restart automatically now? (Enter = yes, n = close and re-run manually)"
@@ -678,20 +678,20 @@ if (-not (Test-StageAlreadyComplete 6)) {
     Write-Plain "       (this is the display name, you can change it later)"
     Write-Plain "    7. When asked for a username, type something ending in 'bot', like:"
     Write-Plain "          mikes_assistant_bot"
-    Write-Plain "       (must end in 'bot' and must be unique — try variations if taken)"
+    Write-Plain "       (must end in 'bot' and must be unique -- try variations if taken)"
     Write-Plain "    8. BotFather sends you a long token that looks like:"
     Write-Plain "          123456789:ABCdefGHIjklMNOpqrsTUVwxyz-1234567"
     Write-Plain "    9. Copy that ENTIRE token (long press, tap Copy)"
     Write-Host ""
     Write-Bold "  IMPORTANT:"
     Write-Plain "    - Save the token in Bitwarden right now (call it 'Telegram bot token')"
-    Write-Plain "    - The token is like a password — anyone with it controls your bot"
+    Write-Plain "    - The token is like a password -- anyone with it controls your bot"
     Write-Host ""
 
     Wait-ForReturn "Press Enter once you've saved the token in Bitwarden..."
 
     # Telegram bot tokens are <numeric_id>:<alphanumeric + dash/underscore>.
-    # Validation is intentionally permissive — real validation happens when OpenClaw connects.
+    # Validation is intentionally permissive -- real validation happens when OpenClaw connects.
     $tgOk = $false
     $tgAttempts = 0
     while (-not $tgOk) {
@@ -735,9 +735,10 @@ if (-not (Test-StageAlreadyComplete 6)) {
             } else {
                 Write-Plain "  Try pasting again, or close and re-run if you need to find it again."
             }
+        }
     }
 
-    # Save-Progress 6 was moved inside the loop — fires immediately on token save,
+    # Save-Progress 6 was moved inside the loop -- fires immediately on token save,
     # closing the gap between key-saved and stage-block-end where a window-close
     # could lose progress.
 }
@@ -762,7 +763,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
     Write-Plain "    6. Once you're logged into the dashboard, click 'API Keys' on the left"
     Write-Plain "    7. Click 'Create new API key'"
     Write-Plain "    8. Give it a name like 'My laptop bot'"
-    Write-Plain "    9. The key starts with 'sk-' and is shown ONCE — copy it immediately"
+    Write-Plain "    9. The key starts with 'sk-' and is shown ONCE -- copy it immediately"
     Write-Plain "   10. Save it in Bitwarden (call it 'DeepSeek API key')"
     Write-Host ""
     Write-Bold "  ABOUT BILLING:"
@@ -788,7 +789,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
     $dsOk = $false
     $dsAttempts = 0
     # DeepSeek API keys start with 'sk-' followed by 16+ non-whitespace characters.
-    # Validation is intentionally permissive — real validation happens via the API test.
+    # Validation is intentionally permissive -- real validation happens via the API test.
     while (-not $dsOk) {
         $dsAttempts++
         $secureKey = Read-Host "  Paste your DeepSeek API key" -AsSecureString
@@ -833,7 +834,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
         }
     }
 
-    # Save-Progress 7 was moved inside the loop — fires immediately on key save.
+    # Save-Progress 7 was moved inside the loop -- fires immediately on key save.
 }
 
 
@@ -981,7 +982,7 @@ if (-not (Test-StageAlreadyComplete 10)) {
     Write-Plain "    Channel?                    -> Telegram"
     Write-Plain "    Telegram bot token?         -> Paste your token (we have it ready)"
     Write-Plain "    Daemon install?             -> Yes"
-    Write-Plain "    Skills?                     -> Yes (or skip — you can add later)"
+    Write-Plain "    Skills?                     -> Yes (or skip -- you can add later)"
     Write-Host ""
     Write-Warn "If anything looks DIFFERENT from this list, take a screenshot and text Shands"
     Write-Warn "BEFORE answering. Don't guess on questions about gateways, ports, or auth."
@@ -998,7 +999,7 @@ if (-not (Test-StageAlreadyComplete 10)) {
     Write-Plain "  - Just press Enter if it offers to use the env var, OR"
     Write-Plain "  - Paste the key manually (right-click in the wizard window)"
     Write-Host ""
-    Write-Bold "  FALLBACK — if the wizard DOESN'T pick up the keys automatically:"
+    Write-Bold "  FALLBACK -- if the wizard DOESN'T pick up the keys automatically:"
     Write-Plain "  DeepSeek key starts with: $($dsKey.Substring(0, [Math]::Min(8, $dsKey.Length)))..."
     Write-Plain "  Telegram token starts with: $($tgToken.Substring(0, [Math]::Min(10, $tgToken.Length)))..."
     Write-Plain "  Copy the full key from Bitwarden if you need to paste manually."
@@ -1105,7 +1106,7 @@ if (-not (Test-StageAlreadyComplete 12)) {
         $code = 0
         if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
         if ($code -eq 401 -or $code -eq 403) {
-            Write-Success "Dashboard is reachable (HTTP $code — wants auth, that's expected)."
+            Write-Success "Dashboard is reachable (HTTP $code -- wants auth, that's expected)."
         } else {
             Write-Warn "Dashboard didn't respond cleanly. Gateway may still be starting."
             Write-Plain "  Wait 30 seconds and try opening http://127.0.0.1:18789/ in your browser."
@@ -1157,7 +1158,7 @@ if (-not (Test-StageAlreadyComplete 12)) {
 if (-not (Test-StageAlreadyComplete 13)) {
     Show-StageHeader 13 $Script:TotalStages "Approve Your Phone with the Bot"
 
-    Write-Plain "OpenClaw doesn't let just anyone message your bot — you have to approve"
+    Write-Plain "OpenClaw doesn't let just anyone message your bot -- you have to approve"
     Write-Plain "your own phone first. Here's how:"
     Write-Host ""
     Write-Bold "  STEP 1: Find your bot in Telegram (on your phone)"
@@ -1165,7 +1166,7 @@ if (-not (Test-StageAlreadyComplete 13)) {
     Write-Plain "    Tap it to open the chat."
     Write-Host ""
     Write-Bold "  STEP 2: Send your bot any message"
-    Write-Plain "    Just type 'hello' and send. The bot won't reply yet — that's expected."
+    Write-Plain "    Just type 'hello' and send. The bot won't reply yet -- that's expected."
     Write-Plain "    This puts a 'pairing request' in the queue."
     Write-Host ""
 
@@ -1255,7 +1256,7 @@ if (-not (Test-StageAlreadyComplete 14)) {
         $reply = Read-Host "  Did the bot reply? (y = yes, n = no, s = skip and finish setup)"
         if ($reply -match '^[Yy]') {
             # Verify the message actually traveled the full path by checking logs.
-            # This converts Mike's job from "search" to "verification" — we do the
+            # This converts Mike's job from "search" to "verification" -- we do the
             # filtering; he confirms what he sees.
             Write-Host ""
             Write-Info "Checking the bot's logs to confirm the message traveled the full path..."
@@ -1319,7 +1320,7 @@ if (-not (Test-StageAlreadyComplete 14)) {
                     $testOk = $true
                 } else {
                     Write-Warn "The logs don't clearly show the full message path."
-                    Write-Plain "  Your bot may still be working — the log messages can vary."
+                    Write-Plain "  Your bot may still be working -- the log messages can vary."
                     Write-Plain "  But to be safe, take a screenshot of this window and text it to Shands."
                     Write-Plain "  He can check whether everything is actually connected."
                     Write-Host ""
@@ -1330,7 +1331,7 @@ if (-not (Test-StageAlreadyComplete 14)) {
                 }
             } catch {
                 Write-Warn "Couldn't check the logs: $($_.Exception.Message)"
-                Write-Plain "  This is usually fine — your bot replied, so the path is working."
+                Write-Plain "  This is usually fine -- your bot replied, so the path is working."
                 Write-Plain "  If you want to double-check, run: openclaw logs"
                 $testOk = $true
             }
@@ -1340,7 +1341,7 @@ if (-not (Test-StageAlreadyComplete 14)) {
         } else {
             Write-Host ""
             Write-Plain "  Troubleshooting:"
-            Write-Plain "    1. Wait another 30 seconds — first reply can be slow"
+            Write-Plain "    1. Wait another 30 seconds -- first reply can be slow"
             Write-Plain "    2. Check the gateway: open PowerShell, run 'openclaw gateway status'"
             Write-Plain "    3. Check the logs: 'openclaw logs --follow' (Ctrl+C to stop)"
             Write-Plain "    4. Make sure pairing was approved in Stage 13"
@@ -1364,7 +1365,7 @@ Save-Progress 15
 Show-StageHeader 15 $Script:TotalStages "All Done!"
 
 Write-Host ""
-Write-Host "  Congratulations Mike — your bot is set up." -ForegroundColor Green
+Write-Host "  Congratulations Mike -- your bot is set up." -ForegroundColor Green
 Write-Host ""
 Write-Plain "What you have now:"
 Write-Plain "  - OpenClaw running in the background as a service"
@@ -1372,11 +1373,11 @@ Write-Plain "  - DeepSeek powering the AI brain"
 Write-Plain "  - Telegram bot accepting messages from your phone and laptop"
 Write-Plain "  - Bitwarden storing all your sensitive keys"
 Write-Host ""
-Write-Bold "  IMPORTANT — CLEAN UP:"
+Write-Bold "  IMPORTANT -- CLEAN UP:"
 Write-Plain "  This setup saved your API keys temporarily here:"
 Write-Plain "      $EnvFile"
 Write-Plain "  Once you've confirmed your bot works for a few days, DELETE that file."
-Write-Plain "  OpenClaw has its own copy of the keys in its config — you don't need this one."
+Write-Plain "  OpenClaw has its own copy of the keys in its config -- you don't need this one."
 Write-Host ""
 Write-Bold "  IF SOMETHING BREAKS LATER:"
 Write-Plain "  - First check: open PowerShell, run 'openclaw gateway status'"
