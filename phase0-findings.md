@@ -39,7 +39,10 @@
 - **Confirmed:** `https://api.deepseek.com/chat/completions` (no `/v1` prefix)
 - The curl example on DeepSeek's docs uses `https://api.deepseek.com/chat/completions` directly
 - The `base_url` for OpenAI format is documented as `https://api.deepseek.com`
-- **The brief's V0.2 speculation about needing `/v1` is incorrect — the current endpoint is correct as-is.**
+- **Additional verification (2026-05-06):** Both endpoints tested live with `deepseek-v4-pro` + thinking enabled:
+  - `/chat/completions` → HTTP 200 ✅
+  - `/v1/chat/completions` → HTTP 200 ✅
+- **Decision:** Use `/v1/chat/completions` — it is the canonical OpenAI-compatible path and both work.
 
 ### Model names
 DeepSeek API docs (live) list these models:

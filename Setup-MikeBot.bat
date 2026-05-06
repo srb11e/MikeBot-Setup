@@ -42,7 +42,12 @@ if %errorlevel% neq 0 (
     exit /b 0
 )
 
-REM --- We are admin. Run the PowerShell script. ---
+REM --- We are admin. Change to the script's directory so relative paths work.
+REM     After UAC elevation, the working directory is C:\Windows\System32.
+REM     Without pushd, any future edit that uses a relative path will fail.
+pushd "%~dp0"
+
+REM --- Now run the PowerShell script. ---
 REM   -NoProfile           = don't load Mike's PowerShell profile (clean environment)
 REM   -ExecutionPolicy Bypass = allow this script to run, just for this session
 REM   -File                = run the script file

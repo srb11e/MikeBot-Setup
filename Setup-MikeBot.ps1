@@ -72,7 +72,12 @@ function Test-UserChoseSkip {
 # PROGRESS TRACKING
 # -----------------------------------------------------------------------------
 
-$ProgressDir  = Join-Path $env:USERPROFILE "MikeBot-Setup"
+# Use LOCALAPPDATA instead of USERPROFILE to avoid OneDrive sync.
+# On corporate-managed laptops, USERPROFILE (including Desktop and Documents)
+# is often inside a OneDrive-synced folder. LOCALAPPDATA is by Windows
+# convention not roamed and not synced by OneDrive — so secrets stored here
+# during setup won't leak to cloud storage.
+$ProgressDir  = Join-Path $env:LOCALAPPDATA "MikeBot-Setup"
 $ProgressFile = Join-Path $ProgressDir   ".progress"
 $EnvFile      = Join-Path $ProgressDir   ".env"  # stores API keys etc. between stages
 $LogFile      = Join-Path $ProgressDir   "setup-log.md"

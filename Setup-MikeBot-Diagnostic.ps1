@@ -181,7 +181,7 @@ try {
 # -----------------------------------------------------------------------------
 Section "Setup Files"
 # -----------------------------------------------------------------------------
-$progressDir = Join-Path $env:USERPROFILE "MikeBot-Setup"
+$progressDir = Join-Path $env:LOCALAPPDATA "MikeBot-Setup"
 if (Test-Path $progressDir) {
     OK "Setup folder exists: $progressDir"
     Get-ChildItem $progressDir -Force | ForEach-Object {
