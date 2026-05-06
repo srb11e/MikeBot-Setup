@@ -1,0 +1,16 @@
+# MikeBot Setup — .gitignore
+
+# Temp files from setup runs (should never be in the repo)
+*.env
+.progress
+setup-log.md
+
+# OS trash
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor
+*.swp
+*.swo
+*~
