@@ -42,6 +42,9 @@ The setup script walks through:
 - **Colored, categorized output.** Success/warning/failure/info messages use distinct colors so Mike can scan visually without parsing text.
 - **Wizard answers cheat sheet.** Stage 10 prints the exact answer for every `openclaw onboard` prompt, with explicit instructions to STOP and screenshot if anything differs.
 - **Retry/skip/quit on most fallible steps.** Stages 4, 6, 7, 8, 9, 10, and 13 offer retry, skip, or quit options when operations fail. Stage 1 (old Windows) exits immediately since no workaround exists. Progress is always saved before exit.
+- **Winget timeout and manual fallback.** Stage 4 no longer runs invisible winget searches that can hang indefinitely. All winget operations have configurable timeouts (10 minutes per install, 2 minutes for source updates). If winget is broken or unavailable, a clear manual-install path is provided for Git, Node.js, Telegram Desktop, and Bitwarden. If Git and Node are already present on the system, Stage 4 skips winget entirely.
+- **Existing OpenClaw detection.** Before installing or configuring OpenClaw, the script checks whether OpenClaw is already on the system. If found, it warns the user and requires an intentional typed override (`SETUP-MIKEBOT`) to continue — preventing accidental overwrite of another bot's configuration.
+- **Support blocks.** When a critical step fails, a compact formatted block is printed that Mike can screenshot and text to Shands for remote diagnosis.
 
 ## For Maintainers
 

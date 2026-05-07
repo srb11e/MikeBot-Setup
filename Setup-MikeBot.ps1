@@ -69,6 +69,32 @@ function Test-UserChoseSkip {
 }
 
 # -----------------------------------------------------------------------------
+# SUPPORT BLOCK -- compact summary Mike can screenshot or text to Shands
+# -----------------------------------------------------------------------------
+
+function Show-SupportBlock {
+    param(
+        [int]$StageNum,
+        [string]$StageName,
+        [string]$StepName,
+        [string]$ErrorDetail
+    )
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $setupDir = Join-Path $env:LOCALAPPDATA "MikeBot-Setup"
+    Write-Host ""
+    Write-Host "  ================================================================" -ForegroundColor Yellow
+    Write-Host "   Send this to Shands:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   Stage: $StageNum - $StageName" -ForegroundColor White
+    Write-Host "   Step: $StepName" -ForegroundColor White
+    Write-Host "   Error: $ErrorDetail" -ForegroundColor White
+    Write-Host "   Time: $ts" -ForegroundColor White
+    Write-Host "   Setup folder: $setupDir" -ForegroundColor White
+    Write-Host "  ================================================================" -ForegroundColor Yellow
+    Write-Host ""
+}
+
+# -----------------------------------------------------------------------------
 # PROGRESS TRACKING
 # -----------------------------------------------------------------------------
 
@@ -210,16 +236,28 @@ function Assert-ToolAvailable {
 function Install-WithWinget {
     param(
         [string]$PackageId,
-        [string]$DisplayName
+        [string]$DisplayName,
+        [int]$TimeoutSeconds = 600
     )
-    Write-Info "Installing $DisplayName (this may take a few minutes -- silence is normal)..."
+    Write-Info "Installing $DisplayName (up to $($TimeoutSeconds/60) minutes -- silence is normal)..."
 
     $wingetArgs = @("install", "--id", $PackageId, "--exact",
                     "--silent", "--accept-source-agreements", "--accept-package-agreements")
 
-    $proc = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
-    $code = $proc.ExitCode
+    # Start-Process -PassThru without -Wait returns immediately, giving us a
+    # Process object we can WaitForExit() on with a timeout.
+    # -NoNewWindow keeps output visible so Mike can see progress.
+    $proc = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -PassThru -NoNewWindow
+    $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
 
+    if (-not $completed) {
+        try { $proc.Kill() } catch { }
+        Write-Fail "$DisplayName install timed out after $($TimeoutSeconds/60) minutes."
+        Write-Plain "  This is a Windows Package Manager issue, not your fault."
+        return $false
+    }
+
+    $code = $proc.ExitCode
     # Success (0) or already-installed codes
     $alreadyInstalled = @(0, -1978335189, -1978335206)
     if ($code -in $alreadyInstalled) {
@@ -535,7 +573,7 @@ if (-not (Test-StageAlreadyComplete 3)) {
 
 
 # =============================================================================
-# STAGE 4: Install Foundation Tools (winget batch)
+# STAGE 4: Install Foundation Tools (winget with timeout + manual fallback)
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 4)) {
@@ -546,75 +584,156 @@ if (-not (Test-StageAlreadyComplete 4)) {
     Write-Plain "  - Node.js 22 LTS (the runtime OpenClaw runs on)"
     Write-Plain "  - Telegram Desktop (so you can chat with the bot from this laptop too)"
     Write-Host ""
-    Write-Plain "Each one takes a couple minutes. Long pauses during downloads are normal."
-    Write-Host ""
 
-    # Verify winget exists. On a brand-new Windows 11 laptop it does.
-    # On older Windows 10 it may not.
-    if (-not (Test-CommandExists "winget")) {
-        Write-Fail "winget (Windows Package Manager) is not available on this laptop."
-        Write-Plain "  This is unusual on a recent laptop."
-        Write-Plain "  Fix: open Microsoft Store, search 'App Installer', install/update it."
-        Write-Plain "  Then re-run this setup."
-        Wait-ForReturn "Press Enter to exit..."
-        exit 1
-    }
+    # -------------------------------------------------------------------------
+    # Check whether tools are already present (manual install, previous run, etc.)
+    # -------------------------------------------------------------------------
+    Update-EnvironmentPath
+    $gitOk  = Test-CommandExists "git"
+    $nodeOk = Test-CommandExists "node"
 
-    $installs = @(
-        @{ Id = "Git.Git";              Name = "Git" },
-        @{ Id = "OpenJS.NodeJS.LTS";    Name = "Node.js 22 LTS" },
-        @{ Id = "Telegram.TelegramDesktop"; Name = "Telegram Desktop" }
-    )
+    if ($gitOk -and $nodeOk) {
+        Write-Success "Git and Node.js are already available on this laptop."
+        $gv = & git --version 2>$null
+        $nv = & node --version 2>$null
+        Write-Plain "  Git:  $gv"
+        Write-Plain "  Node: $nv"
+        Write-Host ""
+        Write-Plain "  Since the foundation tools are already installed, we can skip"
+        Write-Plain "  the Windows Package Manager steps. We just need to confirm"
+        Write-Plain "  Telegram Desktop is installed."
+        Write-Host ""
+        $tgInstalled = Read-Host "  Is Telegram Desktop installed on this laptop? (y = yes, n = not yet)"
+        if ($tgInstalled -match '^[Yy]') {
+            Write-Success "All foundation tools confirmed."
+            Save-Progress 4
+            # Skip the rest of Stage 4 and go to next stage
+            # (continue script execution below --- PowerShell will fall through
+            #  the enclosing if block once we return control)
+        } else {
+            Write-Plain ""
+            Write-Plain "  No problem. You can install Telegram Desktop anytime:"
+            Write-Plain "    https://desktop.telegram.org"
+            Write-Plain "  It's not required for the bot to work -- just convenient."
+            Write-Host ""
+            Write-Success "Foundation tools are ready. On to the next stage."
+            Save-Progress 4
+        }
+    } else {
+        # -----------------------------------------------------------------
+        # Tools not present -- we need winget
+        # -----------------------------------------------------------------
 
-    # Pre-flight: verify each package ID is still valid before installing.
-    # If a package has been renamed or removed from winget, failing here
-    # gives Mike a clean "contact Shands" path instead of a cryptic
-    # mid-install failure.
-    Write-Info "Verifying package IDs are current..."
-    foreach ($pkg in $installs) {
-        $null = & winget search --id $pkg.Id --exact 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "The package ID for '$($pkg.Name)' has changed or is no longer available."
-            Write-Plain "  Expected ID: $($pkg.Id)"
-            Write-Plain "  This means Microsoft's package registry has changed since the script was written."
-            Write-Plain "  Please contact Shands before continuing -- do not try to work around this."
+        # Verify winget exists. On a brand-new Windows 11 laptop it does.
+        # On older Windows 10 it may not.
+        if (-not (Test-CommandExists "winget")) {
+            Write-Fail "Windows Package Manager (winget) is not available."
+            Write-Plain ""
+            Write-Plain "  This means we can't install tools automatically."
+            Write-Plain "  But you can install them manually from their official websites:"
+            Write-Plain ""
+            Write-Plain "    Git for Windows:      https://git-scm.com/download/win"
+            Write-Plain "    Node.js LTS:          https://nodejs.org  (pick the LTS version)"
+            Write-Plain "    Telegram Desktop:     https://desktop.telegram.org"
+            Write-Plain ""
+            Write-Plain "  After installing them, re-run this setup."
+            Write-Plain "  It will detect them and skip the winget steps."
+            Show-SupportBlock -StageNum 4 -StageName "Install Foundation Tools" `
+                -StepName "winget not found" `
+                -ErrorDetail "winget is not installed on this laptop"
             Wait-ForReturn "Press Enter to exit..."
             exit 1
         }
-    }
-    Write-Success "All package IDs confirmed."
-    Write-Host ""
 
-    foreach ($pkg in $installs) {
-        $null = Invoke-WithRetrySkipQuit -StepName "Installing $($pkg.Name)" -Action {
-            return (Install-WithWinget -PackageId $pkg.Id -DisplayName $pkg.Name)
+        # Quick winget readiness check with visible output and timeout.
+        # winget source update refreshes the package catalog. It can hang
+        # on first run if Microsoft Store source needs setup.
+        Write-Info "Preparing Windows Package Manager (this may take a moment)..."
+        $sourceProc = Start-Process -FilePath "winget" `
+            -ArgumentList @("source", "update") `
+            -PassThru -NoNewWindow
+        $sourceReady = $sourceProc.WaitForExit(120000)  # 2 minute timeout
+
+        if (-not $sourceReady) {
+            try { $sourceProc.Kill() } catch { }
+            Write-Warn "Windows Package Manager appears stuck or unavailable."
+            Write-Plain ""
+            Write-Plain "  This is a Windows issue, not your fault. winget may be doing"
+            Write-Plain "  first-time setup or waiting on the Microsoft Store."
+            Write-Host ""
+            Write-Plain "  You can try these instead:"
+            Write-Plain ""
+            Write-Plain "    r = Retry the winget preparation step"
+            Write-Plain "    m = Manual install instructions (Git, Node, Telegram)"
+            Write-Plain "    q = Quit and save progress"
+            Write-Host ""
+            $wsChoice = Read-Host "  Choose (r/m/q)"
+            if ($wsChoice -match '^[Mm]') {
+                Write-Plain ""
+                Write-Plain "  Install these from their official websites, then re-run this setup:"
+                Write-Plain "    Git for Windows:      https://git-scm.com/download/win"
+                Write-Plain "    Node.js LTS:          https://nodejs.org  (pick the LTS version)"
+                Write-Plain "    Telegram Desktop:     https://desktop.telegram.org"
+                Write-Host ""
+                Write-Plain "  After installing, double-click Setup-MikeBot.bat again."
+                Write-Plain "  The setup will detect Git and Node and skip winget."
+                Show-SupportBlock -StageNum 4 -StageName "Install Foundation Tools" `
+                    -StepName "winget source update" `
+                    -ErrorDetail "winget source update timed out after 2 minutes"
+                Wait-ForReturn "Press Enter to exit..."
+                exit 0
+            } elseif ($wsChoice -match '^[Qq]') {
+                Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                exit 0
+            }
+            # else: retry -- loop back by continuing to the install block
         }
-    }
-
-    # Pick up the new tools without restarting the shell
-    Update-EnvironmentPath
-
-    Write-Host ""
-    Write-Info "Verifying installs..."
-    if (Test-CommandExists "git")  { Write-Success "git is available."  } else { Write-Warn "git not found in PATH yet -- may need a restart." }
-    if (Test-CommandExists "node") {
-        $nodeVer = & node --version 2>$null
-        Write-Success "node is available ($nodeVer)."
-    } else {
-        Write-Warn "node not found in PATH yet."
-        Write-Plain ""
-        Write-Plain "  This is common -- the PATH changes haven't reached this window yet."
-        Write-Plain "  I can restart this script automatically. You won't lose progress."
+        Write-Success "Windows Package Manager is ready."
         Write-Host ""
-        $restartChoice = Read-Host "  Restart automatically now? (Enter = yes, n = close and re-run manually)"
-        if ($restartChoice -notmatch '^[Nn]') {
-            Write-Info "Restarting..."
-            Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
-            exit 0
+
+        $installs = @(
+            @{ Id = "Git.Git";              Name = "Git" },
+            @{ Id = "OpenJS.NodeJS.LTS";    Name = "Node.js 22 LTS" },
+            @{ Id = "Telegram.TelegramDesktop"; Name = "Telegram Desktop" }
+        )
+
+        # No preflight package-ID verification. winget install itself is the
+        # authoritative check. If a package ID has changed, the install will
+        # fail with a clear winget error and the retry/skip/quit wrapper gives
+        # Mike a path forward. This prevents indefinite hangs on winget search
+        # (which can stall on first-run source setup).
+
+        foreach ($pkg in $installs) {
+            $null = Invoke-WithRetrySkipQuit -StepName "Installing $($pkg.Name)" -Action {
+                return (Install-WithWinget -PackageId $pkg.Id -DisplayName $pkg.Name)
+            }
+        }
+
+        # Pick up the new tools without restarting the shell
+        Update-EnvironmentPath
+
+        Write-Host ""
+        Write-Info "Verifying installs..."
+        if (Test-CommandExists "git")  { Write-Success "git is available."  } else { Write-Warn "git not found in PATH yet -- may need a restart." }
+        if (Test-CommandExists "node") {
+            $nodeVer = & node --version 2>$null
+            Write-Success "node is available ($nodeVer)."
         } else {
-            Write-Plain "  Close this window, then double-click Setup-MikeBot.bat to resume."
-            Wait-ForReturn "Press Enter to close..."
-            exit 0
+            Write-Warn "node not found in PATH yet."
+            Write-Plain ""
+            Write-Plain "  This is common -- the PATH changes haven't reached this window yet."
+            Write-Plain "  I can restart this script automatically. You won't lose progress."
+            Write-Host ""
+            $restartChoice = Read-Host "  Restart automatically now? (Enter = yes, n = close and re-run manually)"
+            if ($restartChoice -notmatch '^[Nn]') {
+                Write-Info "Restarting..."
+                Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
+                exit 0
+            } else {
+                Write-Plain "  Close this window, then double-click Setup-MikeBot.bat to resume."
+                Wait-ForReturn "Press Enter to close..."
+                exit 0
+            }
         }
     }
 
@@ -633,16 +752,42 @@ if (-not (Test-StageAlreadyComplete 5)) {
     Write-Plain "Bitwarden is free and works on Windows, Mac, iPhone, Android."
     Write-Host ""
 
-    if (Test-UserChoseSkip) {
-        Write-Info "Skipping Bitwarden install (you have another password manager)."
+    # Check if Bitwarden is already installed or user has another password manager
+    $bwInstalled = $false
+    $bwCheck = Get-Command "Bitwarden" -ErrorAction SilentlyContinue
+    if ($bwCheck) {
+        Write-Success "Bitwarden appears to be already installed."
+        $bwInstalled = $true
+    } else {
+        # Also check common install path via winget / AppX
+        $bwAppx = Get-AppxPackage -Name "*Bitwarden*" -ErrorAction SilentlyContinue
+        if ($bwAppx) {
+            Write-Success "Bitwarden appears to be already installed."
+            $bwInstalled = $true
+        }
+    }
+
+    if ($bwInstalled) {
+        Write-Plain "  Skipping Bitwarden install."
+        Write-Plain "  Make sure you're logged in before Stage 7 (creating API keys)."
+    } elseif (Test-UserChoseSkip) {
+        Write-Info "Skipping Bitwarden install."
         Write-Warn "Make sure you have somewhere safe to put your API keys before continuing."
+        Write-Plain "  (Any password manager works -- iPhone Notes locked with Face ID, etc.)"
     } else {
         $null = Invoke-WithRetrySkipQuit -StepName "Installing Bitwarden" -Action {
             return (Install-WithWinget -PackageId "Bitwarden.Bitwarden" -DisplayName "Bitwarden")
         }
 
+        # If winget install failed, offer manual fallback
         Write-Host ""
-        Write-Plain "Now create a Bitwarden account:"
+        Write-Plain "  If the install above failed, you can install Bitwarden manually:"
+        Write-Plain "    https://bitwarden.com/download"
+        Write-Plain "  Or use any password manager you already have (iPhone Notes, etc.)"
+        Write-Plain "  The setup just needs you to have somewhere to save your API keys."
+        Write-Host ""
+
+        Write-Plain "After installing, create a Bitwarden account:"
         Write-Plain "  1. Open Bitwarden from your Start menu"
         Write-Plain "  2. Click 'Create Account'"
         Write-Plain "  3. Pick a STRONG master password and write it down somewhere safe"
@@ -650,7 +795,7 @@ if (-not (Test-StageAlreadyComplete 5)) {
         Write-Plain "  4. Confirm the email they send you"
         Write-Host ""
 
-        Wait-ForReturn "Press Enter once Bitwarden is open and you're logged in..."
+        Wait-ForReturn "Press Enter once you have a password manager ready..."
     }
 
     Save-Progress 5
@@ -916,6 +1061,41 @@ if (-not (Test-StageAlreadyComplete 8)) {
 
 if (-not (Test-StageAlreadyComplete 9)) {
     Show-StageHeader 9 $Script:TotalStages "Install OpenClaw"
+
+    # -------------------------------------------------------------------------
+    # Existing OpenClaw guard -- prevent accidental overwrite of another bot
+    # -------------------------------------------------------------------------
+    $ocCmd = Get-Command "openclaw" -ErrorAction SilentlyContinue
+    $ocDir = Join-Path $env:USERPROFILE ".openclaw"
+    $ocExists = ($ocCmd -ne $null) -or (Test-Path $ocDir)
+
+    if ($ocExists) {
+        Write-Host ""
+        Write-Warn "============================================================"
+        Write-Warn "  EXISTING OPENCLAW SETUP DETECTED"
+        Write-Warn "============================================================"
+        Write-Warn ""
+        Write-Plain "  OpenClaw (or its configuration) is already on this laptop."
+        Write-Plain "  This installer is designed for a fresh laptop."
+        Write-Plain "  Running it here may overwrite another bot's configuration."
+        Write-Host ""
+        Write-Plain "  If this IS Mike's laptop and you're re-running the setup"
+        Write-Plain "  after a previous attempt, this is expected -- type the"
+        Write-Plain "  override phrase below to continue."
+        Write-Host ""
+        Write-Bold "  If you are NOT Mike setting up your own bot, STOP NOW."
+        Write-Host ""
+        $override = Read-Host "  Type SETUP-MIKEBOT to continue anyway"
+        if ($override -ne "SETUP-MIKEBOT") {
+            Write-Plain ""
+            Write-Info "Exiting safely. No changes were made."
+            Write-Plain "  If you're re-running the setup on Mike's laptop, re-run"
+            Write-Plain "  and type SETUP-MIKEBOT when prompted."
+            Wait-ForReturn "Press Enter to close..."
+            exit 0
+        }
+        Write-Info "Override accepted. Continuing with setup..."
+    }
 
     Write-Plain "Now we install OpenClaw itself. This is the AI assistant that runs on"
     Write-Plain "your laptop and routes messages between Telegram and DeepSeek."
@@ -1420,6 +1600,29 @@ Write-Plain "  - Do not paste either one into random websites"
 Write-Plain "  - Do not turn off the laptop if you want the bot to keep working"
 Write-Host ""
 
+# -------------------------------------------------------------------------
+# Capture versions for the setup log
+# -------------------------------------------------------------------------
+function Get-VersionSafe {
+    param(
+        [string]$Command,
+        [string]$Args = "--version"
+    )
+    try {
+        $result = & $Command $Args 2>&1 | Select-Object -First 1
+        if ($LASTEXITCODE -eq 0 -and $result) {
+            return $result.ToString().Trim()
+        }
+    } catch { }
+    return "not detected"
+}
+
+$verGit      = Get-VersionSafe "git"
+$verNode     = Get-VersionSafe "node"
+$verNpm      = Get-VersionSafe "npm"
+$verOpenClaw = Get-VersionSafe "openclaw"
+$verWinget   = Get-VersionSafe "winget" "--version"
+
 # Write a setup log Mike (or Shands) can reference later
 $logContent = @"
 # Mike's Bot Setup Log
@@ -1431,10 +1634,11 @@ $logContent = @"
 
 ## Installed Components
 
-- Node.js: $(if (Test-CommandExists 'node') { & node --version } else { 'not detected' })
-- npm: $(if (Test-CommandExists 'npm') { & npm --version } else { 'not detected' })
-- Git: $(if (Test-CommandExists 'git') { (& git --version).Split(' ')[2] } else { 'not detected' })
-- OpenClaw: $(if (Test-CommandExists 'openclaw') { & openclaw --version 2>$null } else { 'not detected' })
+- Git:      $verGit
+- Node.js:  $verNode
+- npm:      $verNpm
+- OpenClaw: $verOpenClaw
+- winget:   $verWinget
 
 ## Configuration
 

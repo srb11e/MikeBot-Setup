@@ -123,6 +123,18 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
         $deep | Select-Object -First 15 | ForEach-Object { Plain "    $_" }
     } catch { $null }
 
+    try {
+        $doctor = & openclaw doctor 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            OK "openclaw doctor passed."
+        } else {
+            Note "openclaw doctor reported issues:"
+            $doctor | Select-Object -First 10 | ForEach-Object { Plain "    $_" }
+        }
+    } catch {
+        Note "Couldn't run openclaw doctor: $($_.Exception.Message)"
+    }
+
     # Config peek (don't print sensitive values)
     try {
         $hasToken = & openclaw config get gateway.auth.token 2>$null
