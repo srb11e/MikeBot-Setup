@@ -111,7 +111,7 @@ trap {
         -StepName "Unexpected error" -ErrorDetail $_.Exception.Message
     Write-Host "  Full details saved to:" -ForegroundColor White
     Write-Host "    $TranscriptFile" -ForegroundColor White
-    Write-Host "  Send that file to Shands." -ForegroundColor White
+    Write-Host "  Send that file to Shands only. It may contain setup details." -ForegroundColor White
     Write-Host ""
     try { Write-SetupEvent "CRASH: Stage $Script:CurrentStage - $($_.Exception.Message)" } catch { $null }
     try { Stop-Transcript } catch { $null }
@@ -166,7 +166,7 @@ if (-not (Test-Path $ProgressDir)) {
     New-Item -ItemType Directory -Path $ProgressDir -Force | Out-Null
 }
 
-# Start transcript — captures all console output to a timestamped file.
+# Start transcript -- captures all console output to a timestamped file.
 # If the script crashes, the transcript persists on disk for remote diagnosis.
 $TranscriptFile = Join-Path $ProgressDir "setup-transcript-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 Start-Transcript -Path $TranscriptFile -Append | Out-Null
@@ -288,7 +288,7 @@ function Assert-ToolAvailable {
 }
 
 # -----------------------------------------------------------------------------
-# SPINNER — visual feedback during long subprocess waits
+# SPINNER -- visual feedback during long subprocess waits
 # -----------------------------------------------------------------------------
 
 function Wait-ProcessWithSpinner {
@@ -529,6 +529,9 @@ if ($Script:LastCompleted -gt 0 -and $Script:LastCompleted -lt $Script:TotalStag
         Write-Info "Starting from the beginning."
     } else {
         Write-Info "Resuming from stage $next."
+        for ($i = 1; $i -le $Script:LastCompleted; $i++) {
+            $Script:StageResults[$i] = "PREVIOUSLY COMPLETED"
+        }
     }
 } elseif ($Script:LastCompleted -ge $Script:TotalStages) {
     Write-Host ""
@@ -706,13 +709,16 @@ if (-not (Test-StageAlreadyComplete 4)) {
     Update-EnvironmentPath
     $gitOk  = Test-CommandExists "git"
     $nodeOk = Test-CommandExists "node"
+    $npmOk  = Test-CommandExists "npm"
 
-    if ($gitOk -and $nodeOk) {
-        Write-Success "Git and Node.js are already available on this laptop."
+    if ($gitOk -and $nodeOk -and $npmOk) {
+        Write-Success "Git, Node.js, and npm are already available on this laptop."
         $gv = & git --version 2>$null
         $nv = & node --version 2>$null
+        $npmv = & npm --version 2>$null
         Write-Plain "  Git:  $gv"
         Write-Plain "  Node: $nv"
+        Write-Plain "  npm:  $npmv"
         Write-Host ""
         Write-Plain "  Since the foundation tools are already installed, we can skip"
         Write-Plain "  the Windows Package Manager steps. We just need to confirm"
@@ -722,9 +728,6 @@ if (-not (Test-StageAlreadyComplete 4)) {
         if ($tgInstalled -match '^[Yy]') {
             Write-Success "All foundation tools confirmed."
             Save-Progress 4
-            # Skip the rest of Stage 4 and go to next stage
-            # (continue script execution below --- PowerShell will fall through
-            #  the enclosing if block once we return control)
         } else {
             Write-Plain ""
             Write-Plain "  No problem. You can install Telegram Desktop anytime:"
@@ -733,6 +736,23 @@ if (-not (Test-StageAlreadyComplete 4)) {
             Write-Host ""
             Write-Success "Foundation tools are ready. On to the next stage."
             Save-Progress 4
+        }
+    } elseif ($gitOk -and $nodeOk -and -not $npmOk) {
+        Write-Warn "Git and Node.js are installed, but npm is missing from PATH."
+        Write-Plain "  npm normally ships with Node.js. This can happen if:"
+        Write-Plain "    - Node.js was installed without npm"
+        Write-Plain "    - The PATH wasn't updated after install"
+        Write-Host ""
+        Write-Plain "  Try reinstalling Node.js LTS from: https://nodejs.org"
+        Write-Plain "  Then close and reopen this window to pick up PATH changes."
+        Write-Host ""
+        $restartChoice = Read-Host "  Press 'r' to restart the script, or 'q' to quit"
+        if ($restartChoice -match '^[Rr]') {
+            Write-Info "Restarting script..."
+            & $PSCommandPath
+            exit 0
+        } else {
+            exit 0
         }
     } else {
         # -----------------------------------------------------------------
@@ -1284,7 +1304,21 @@ if (-not (Test-StageAlreadyComplete 9)) {
             $proc = Start-Process -FilePath "npm" `
                 -ArgumentList "install", "-g", "openclaw" `
                 -PassThru -NoNewWindow
-            $null = Wait-ProcessWithSpinner -Process $proc -Label "Installing OpenClaw (this may take a few minutes)" -TimeoutSeconds 900
+            $completed = Wait-ProcessWithSpinner `
+                -Process $proc `
+                -Label "Installing OpenClaw (this may take a few minutes)" `
+                -TimeoutSeconds 900
+
+            if (-not $completed) {
+                try { $proc.Kill() } catch { $null }
+                Write-Fail "OpenClaw install timed out after 15 minutes."
+                Write-Plain "  This is usually a network, npm, or antivirus issue."
+                Show-SupportBlock -StageNum 9 -StageName "Install OpenClaw" `
+                    -StepName "npm install -g openclaw" `
+                    -ErrorDetail "npm install timed out after 15 minutes"
+                return $false
+            }
+
             if ($proc.ExitCode -eq 0) {
                 Update-EnvironmentPath
                 if (Test-CommandExists "openclaw") {
@@ -1780,7 +1814,7 @@ Show-StageHeader 15 $Script:TotalStages "All Done!"
 Write-Progress -Activity "MikeBot Setup" -Completed
 
 # -------------------------------------------------------------------------
-# Summary dashboard — show each stage's status at a glance
+# Summary dashboard -- show each stage's status at a glance
 # -------------------------------------------------------------------------
 Write-Host ""
 Write-Host "  Setup Summary:" -ForegroundColor White
@@ -1789,9 +1823,10 @@ for ($i = 1; $i -le $Script:TotalStages; $i++) {
     $name = $StageNames[$i].PadRight(38)
     $status = if ($Script:StageResults.ContainsKey($i)) { $Script:StageResults[$i] } else { "OK" }
     $color = switch ($status) {
-        "OK"      { "Green" }
-        "SKIPPED" { "Yellow" }
-        default   { "Red" }
+        "OK"                   { "Green" }
+        "PREVIOUSLY COMPLETED" { "Cyan" }
+        "SKIPPED"              { "Yellow" }
+        default                { "Red" }
     }
     Write-Host "  Stage $($i.ToString().PadLeft(2)): $name" -NoNewline
     Write-Host "[$status]" -ForegroundColor $color
@@ -1916,6 +1951,7 @@ if (-not (Test-Path $ProgressDir)) { New-Item -ItemType Directory -Path $Progres
 $logContent | Set-Content -Path $LogFile -Encoding UTF8
 Write-Plain "Setup log saved to: $LogFile"
 Write-Plain "Full transcript saved to: $TranscriptFile"
+Write-Plain "  (Send this only to Shands if asked -- it may contain setup details.)"
 Write-Host ""
 Write-Plain "You can close this window now. Your bot will keep running in the background."
 Write-Host ""
