@@ -42,6 +42,9 @@ function Show-StageHeader {
         [int]$TotalStages,
         [string]$StageName
     )
+    $pct = [math]::Round(($StageNum - 1) / $TotalStages * 100)
+    Write-Progress -Activity "MikeBot Setup" -Status "Stage $StageNum of $TotalStages : $StageName" `
+        -PercentComplete $pct
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor White
     Write-Host "  Stage $StageNum of $TotalStages : $StageName" -ForegroundColor White
@@ -95,6 +98,49 @@ function Show-SupportBlock {
 }
 
 # -----------------------------------------------------------------------------
+# GLOBAL ERROR TRAP -- catches unhandled terminating errors
+# -----------------------------------------------------------------------------
+# Mike never sees a naked stack trace. Instead he gets a support block
+# with the stage, error message, and transcript file path.
+
+trap {
+    $stageName = if ($Script:CurrentStage -gt 0 -and $Script:CurrentStage -le $Script:TotalStages) {
+        $StageNames[$Script:CurrentStage]
+    } else { "Setup" }
+    Show-SupportBlock -StageNum $Script:CurrentStage -StageName $stageName `
+        -StepName "Unexpected error" -ErrorDetail $_.Exception.Message
+    Write-Host "  Full details saved to:" -ForegroundColor White
+    Write-Host "    $TranscriptFile" -ForegroundColor White
+    Write-Host "  Send that file to Shands." -ForegroundColor White
+    Write-Host ""
+    try { Write-SetupEvent "CRASH: Stage $Script:CurrentStage - $($_.Exception.Message)" } catch { $null }
+    try { Stop-Transcript } catch { $null }
+    Read-Host "Press Enter to close" | Out-Null
+    exit 1
+}
+
+# -----------------------------------------------------------------------------
+# EVENT LOG -- append-mode timeline for remote diagnosis
+# -----------------------------------------------------------------------------
+
+function Write-SetupEvent {
+    param([string]$Message)
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -Path $EventLogFile -Value "[$ts] $Message" -ErrorAction SilentlyContinue
+}
+
+# -----------------------------------------------------------------------------
+# SKIP TRACKER -- records which stages/steps were skipped
+# -----------------------------------------------------------------------------
+
+function Add-Skip {
+    param([int]$StageNum, [string]$StepName)
+    $Script:SkippedStages += "${StageNum}: $StepName"
+    $Script:StageResults[$StageNum] = "SKIPPED"
+    Write-SetupEvent "SKIP: Stage $StageNum - $StepName"
+}
+
+# -----------------------------------------------------------------------------
 # PROGRESS TRACKING
 # -----------------------------------------------------------------------------
 
@@ -108,8 +154,22 @@ $ProgressFile = Join-Path $ProgressDir   ".progress"
 $EnvFile      = Join-Path $ProgressDir   ".env"  # stores API keys etc. between stages
 $LogFile      = Join-Path $ProgressDir   "setup-log.md"
 $TokenFile    = Join-Path $ProgressDir   "dashboard-token.txt"  # separate to avoid collision with log
-$Script:LastCompleted = 0
-$Script:TotalStages   = 15
+$EventLogFile = Join-Path $ProgressDir   "setup-events.log"
+$Script:LastCompleted  = 0
+$Script:TotalStages    = 15
+$Script:CurrentStage   = 0
+$Script:SkippedStages  = @()
+$Script:StageResults   = @{}
+
+# Ensure the progress directory exists before transcript/event log start
+if (-not (Test-Path $ProgressDir)) {
+    New-Item -ItemType Directory -Path $ProgressDir -Force | Out-Null
+}
+
+# Start transcript — captures all console output to a timestamped file.
+# If the script crashes, the transcript persists on disk for remote diagnosis.
+$TranscriptFile = Join-Path $ProgressDir "setup-transcript-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+Start-Transcript -Path $TranscriptFile -Append | Out-Null
 
 function Save-Progress {
     param([int]$StageNum)
@@ -121,6 +181,10 @@ LAST_COMPLETED=$StageNum
 TIMESTAMP=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')
 "@ | Set-Content -Path $ProgressFile -Encoding UTF8
     $Script:LastCompleted = $StageNum
+    if (-not $Script:StageResults.ContainsKey($StageNum)) {
+        $Script:StageResults[$StageNum] = "OK"
+    }
+    Write-SetupEvent "COMPLETE: Stage $StageNum"
 }
 
 function Import-Progress {
@@ -224,6 +288,41 @@ function Assert-ToolAvailable {
 }
 
 # -----------------------------------------------------------------------------
+# SPINNER — visual feedback during long subprocess waits
+# -----------------------------------------------------------------------------
+
+function Wait-ProcessWithSpinner {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$Label,
+        [int]$TimeoutSeconds = 600
+    )
+    $frames = @('|','/','-','\')
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $i = 0
+
+    while (-not $Process.HasExited) {
+        if ($sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            Write-Host "`r  $($frames[$i % 4]) $Label... TIMED OUT                    " -NoNewline
+            Write-Host ""
+            return $false
+        }
+        $elapsed = $sw.Elapsed
+        $timeStr = if ($elapsed.TotalMinutes -ge 1) {
+            "{0}m {1:D2}s" -f [math]::Floor($elapsed.TotalMinutes), $elapsed.Seconds
+        } else {
+            "{0}s" -f $elapsed.Seconds
+        }
+        Write-Host "`r  $($frames[$i % 4]) $Label... ($timeStr)   " -NoNewline
+        $i++
+        Start-Sleep -Milliseconds 250
+    }
+
+    Write-Host "`r                                                                  `r" -NoNewline
+    return $true
+}
+
+# -----------------------------------------------------------------------------
 # WINGET INSTALL HELPER
 # -----------------------------------------------------------------------------
 # winget exit codes (canonical, from Microsoft winget-cli returnCodes.md):
@@ -239,16 +338,13 @@ function Install-WithWinget {
         [string]$DisplayName,
         [int]$TimeoutSeconds = 600
     )
-    Write-Info "Installing $DisplayName (up to $($TimeoutSeconds/60) minutes -- silence is normal)..."
+    Write-Info "Installing $DisplayName..."
 
     $wingetArgs = @("install", "--id", $PackageId, "--exact",
                     "--silent", "--accept-source-agreements", "--accept-package-agreements")
 
-    # Start-Process -PassThru without -Wait returns immediately, giving us a
-    # Process object we can WaitForExit() on with a timeout.
-    # -NoNewWindow keeps output visible so Mike can see progress.
     $proc = Start-Process -FilePath "winget" -ArgumentList $wingetArgs -PassThru -NoNewWindow
-    $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+    $completed = Wait-ProcessWithSpinner -Process $proc -Label "Installing $DisplayName" -TimeoutSeconds $TimeoutSeconds
 
     if (-not $completed) {
         try { $proc.Kill() } catch { $null }
@@ -287,6 +383,7 @@ function Invoke-WithRetrySkipQuit {
         $attempts++
         Write-Host ""
         Write-Fail "$StepName failed."
+        Write-SetupEvent "FAIL: $StepName (attempt $attempts)"
 
         $capped = ($attempts -ge $MaxRetries)
         if ($capped) {
@@ -308,18 +405,25 @@ function Invoke-WithRetrySkipQuit {
                 if ($capped) {
                     Write-Plain "  Retry is no longer available for this step. Choose s or q."
                 } else {
+                    Write-SetupEvent "RETRY: $StepName (attempt $($attempts+1))"
                     Write-Info "Retrying..."; continue
                 }
             }
-            '^[Ss]' { return $false }
+            '^[Ss]' {
+                Add-Skip -StageNum $Script:CurrentStage -StepName $StepName
+                return $false
+            }
             '^[Qq]' {
+                Write-SetupEvent "QUIT: User quit at $StepName"
                 Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                try { Stop-Transcript } catch { $null }
                 exit 0
             }
             default {
                 if ($capped) {
                     Write-Plain "  Retry is no longer available for this step. Choose s or q."
                 } else {
+                    Write-SetupEvent "RETRY: $StepName (attempt $($attempts+1))"
                     Write-Info "Retrying..."; continue
                 }
             }
@@ -445,6 +549,8 @@ Update-EnvironmentPath
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 1)) {
+    $Script:CurrentStage = 1
+    Write-SetupEvent "START: Stage 1 - Windows Version Check"
     Show-StageHeader 1 $Script:TotalStages "Windows Version Check"
 
     Write-Plain "Checking that your Windows is new enough for OpenClaw."
@@ -463,6 +569,8 @@ if (-not (Test-StageAlreadyComplete 1)) {
         Write-Plain "  You need at least build 19041 (Windows 10 May 2020 Update)."
         Write-Plain "  Run Windows Update first, then re-run this setup."
         Write-Plain "  If updates aren't fixing it, text Shands."
+        Show-SupportBlock -StageNum 1 -StageName "Windows Version Check" `
+            -StepName "Build check" -ErrorDetail "Build $build is below 19041"
         Wait-ForReturn "Press Enter to exit..."
         exit 1
     } else {
@@ -478,6 +586,8 @@ if (-not (Test-StageAlreadyComplete 1)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 2)) {
+    $Script:CurrentStage = 2
+    Write-SetupEvent "START: Stage 2 - Windows Update"
     Show-StageHeader 2 $Script:TotalStages "Windows Update"
 
     Write-Plain "Before we install anything, let's make sure Windows is up to date."
@@ -509,12 +619,15 @@ if (-not (Test-StageAlreadyComplete 2)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 3)) {
+    $Script:CurrentStage = 3
+    Write-SetupEvent "START: Stage 3 - Security Basics"
     Show-StageHeader 3 $Script:TotalStages "Security Basics"
 
     Write-Plain "This laptop will store an API key that costs real money if someone"
     Write-Plain "else gets it. Let's lock it down. Three things, takes about 5 minutes."
 
     if (Test-UserChoseSkip) {
+        Add-Skip -StageNum 3 -StepName "Security basics"
         Write-Info "Skipping security setup (do this later -- text Shands if unsure)."
     } else {
         Write-Host ""
@@ -577,6 +690,8 @@ if (-not (Test-StageAlreadyComplete 3)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 4)) {
+    $Script:CurrentStage = 4
+    Write-SetupEvent "START: Stage 4 - Install Foundation Tools"
     Show-StageHeader 4 $Script:TotalStages "Install Foundation Tools"
 
     Write-Plain "Installing the tools the bot needs:"
@@ -659,7 +774,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
             $sourceProc = Start-Process -FilePath "winget" `
                 -ArgumentList @("source", "update") `
                 -PassThru -NoNewWindow
-            $sourceReady = $sourceProc.WaitForExit(120000)  # 2 minute timeout
+            $sourceReady = Wait-ProcessWithSpinner -Process $sourceProc -Label "Updating package catalog" -TimeoutSeconds 120
 
             if (-not $sourceReady) {
                 try { $sourceProc.Kill() } catch { $null }
@@ -791,6 +906,8 @@ if (-not (Test-StageAlreadyComplete 4)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 5)) {
+    $Script:CurrentStage = 5
+    Write-SetupEvent "START: Stage 5 - Install Bitwarden"
     Show-StageHeader 5 $Script:TotalStages "Install Bitwarden (Password Manager)"
 
     Write-Plain "Before you create API keys, you need somewhere safe to keep them."
@@ -816,6 +933,7 @@ if (-not (Test-StageAlreadyComplete 5)) {
         Write-Plain "  Skipping Bitwarden install."
         Write-Plain "  Make sure you're logged in before Stage 7 (creating API keys)."
     } elseif (Test-UserChoseSkip) {
+        Add-Skip -StageNum 5 -StepName "Bitwarden install"
         Write-Info "Skipping Bitwarden install."
         Write-Warn "Make sure you have somewhere safe to put your API keys before continuing."
         Write-Plain "  (Any password manager works -- iPhone Notes locked with Face ID, etc.)"
@@ -852,6 +970,8 @@ if (-not (Test-StageAlreadyComplete 5)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 6)) {
+    $Script:CurrentStage = 6
+    Write-SetupEvent "START: Stage 6 - Create Telegram Bot"
     Show-StageHeader 6 $Script:TotalStages "Create Telegram Bot"
 
     Write-Plain "Now we'll create your bot's identity in Telegram."
@@ -939,6 +1059,8 @@ if (-not (Test-StageAlreadyComplete 6)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 7)) {
+    $Script:CurrentStage = 7
+    Write-SetupEvent "START: Stage 7 - Create DeepSeek Account & API Key"
     Show-StageHeader 7 $Script:TotalStages "Create DeepSeek Account & API Key"
 
     Write-Plain "DeepSeek is the AI model that will power your bot. It's about 10x cheaper"
@@ -1033,6 +1155,8 @@ if (-not (Test-StageAlreadyComplete 7)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 8)) {
+    $Script:CurrentStage = 8
+    Write-SetupEvent "START: Stage 8 - Test the API Key"
     Show-StageHeader 8 $Script:TotalStages "Test the API Key"
 
     Write-Plain "Before we set up OpenClaw, let's confirm your DeepSeek key actually works."
@@ -1042,6 +1166,8 @@ if (-not (Test-StageAlreadyComplete 8)) {
     $key = Get-Secret -Key "DEEPSEEK_API_KEY"
     if (-not $key) {
         Write-Fail "DeepSeek key not found. Go back to Stage 7."
+        Show-SupportBlock -StageNum 8 -StageName "Test the API Key" `
+            -StepName "Load API key" -ErrorDetail "DEEPSEEK_API_KEY not found in .env"
         Wait-ForReturn "Press Enter to exit..."
         exit 1
     }
@@ -1105,6 +1231,8 @@ if (-not (Test-StageAlreadyComplete 8)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 9)) {
+    $Script:CurrentStage = 9
+    Write-SetupEvent "START: Stage 9 - Install OpenClaw"
     Show-StageHeader 9 $Script:TotalStages "Install OpenClaw"
 
     # -------------------------------------------------------------------------
@@ -1152,10 +1280,11 @@ if (-not (Test-StageAlreadyComplete 9)) {
 
     $null = Invoke-WithRetrySkipQuit -StepName "Installing OpenClaw" -Action {
         try {
-            Write-Info "Installing OpenClaw via npm (this can take 5-10 minutes)..."
+            Write-Info "Installing OpenClaw via npm..."
             $proc = Start-Process -FilePath "npm" `
                 -ArgumentList "install", "-g", "openclaw" `
-                -Wait -PassThru -NoNewWindow
+                -PassThru -NoNewWindow
+            $null = Wait-ProcessWithSpinner -Process $proc -Label "Installing OpenClaw (this may take a few minutes)" -TimeoutSeconds 900
             if ($proc.ExitCode -eq 0) {
                 Update-EnvironmentPath
                 if (Test-CommandExists "openclaw") {
@@ -1187,6 +1316,8 @@ if (-not (Test-StageAlreadyComplete 9)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 10)) {
+    $Script:CurrentStage = 10
+    Write-SetupEvent "START: Stage 10 - OpenClaw Onboarding"
     Show-StageHeader 10 $Script:TotalStages "OpenClaw Onboarding"
 
     Write-Plain "OpenClaw has its own setup wizard that asks you a series of questions."
@@ -1222,6 +1353,9 @@ if (-not (Test-StageAlreadyComplete 10)) {
         if (-not $dsKey)  { Write-Plain "  DeepSeek API key not found -- go back to Stage 7." }
         if (-not $tgToken) { Write-Plain "  Telegram bot token not found -- go back to Stage 6." }
         Write-Plain "  If you already saved them, close this window and re-run Setup-MikeBot.bat."
+        $missing = if (-not $dsKey -and -not $tgToken) { "Both keys" } elseif (-not $dsKey) { "DeepSeek key" } else { "Telegram token" }
+        Show-SupportBlock -StageNum 10 -StageName "OpenClaw Onboarding" `
+            -StepName "Load saved keys" -ErrorDetail "$missing not found in .env"
         Wait-ForReturn "Press Enter to exit..."
         exit 1
     }
@@ -1281,6 +1415,8 @@ if (-not (Test-StageAlreadyComplete 10)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 11)) {
+    $Script:CurrentStage = 11
+    Write-SetupEvent "START: Stage 11 - Gateway Health Check"
     Show-StageHeader 11 $Script:TotalStages "Gateway Health Check"
 
     Write-Plain "Checking that the OpenClaw gateway (the brain of the bot) is running..."
@@ -1311,12 +1447,16 @@ if (-not (Test-StageAlreadyComplete 11)) {
         Write-Host ""
         Write-Warn "The gateway is the heart of the bot. The remaining stages will not work"
         Write-Warn "until it's running. Stop here and text Shands."
+        Show-SupportBlock -StageNum 11 -StageName "Gateway Health Check" `
+            -StepName "Gateway status" -ErrorDetail "Gateway not healthy after retries"
         Write-Host ""
         $force = Read-Host "  Type 'continue anyway' to proceed (NOT recommended), or anything else to stop"
         if ($force -ne "continue anyway") {
+            Write-SetupEvent "QUIT: Gateway unhealthy, user stopped"
             Write-Info "Stopping. Run Setup-MikeBot.bat again after fixing the gateway."
             exit 0
         }
+        Write-SetupEvent "OVERRIDE: User continued despite gateway failure"
     }
 
     Save-Progress 11
@@ -1328,6 +1468,8 @@ if (-not (Test-StageAlreadyComplete 11)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 12)) {
+    $Script:CurrentStage = 12
+    Write-SetupEvent "START: Stage 12 - Dashboard Check"
     Show-StageHeader 12 $Script:TotalStages "Dashboard Check"
 
     Write-Plain "OpenClaw has a web dashboard you can open in your browser."
@@ -1391,6 +1533,8 @@ if (-not (Test-StageAlreadyComplete 12)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 13)) {
+    $Script:CurrentStage = 13
+    Write-SetupEvent "START: Stage 13 - Approve Your Phone with the Bot"
     Show-StageHeader 13 $Script:TotalStages "Approve Your Phone with the Bot"
 
     Write-Plain "OpenClaw doesn't let just anyone message your bot -- you have to approve"
@@ -1468,12 +1612,17 @@ if (-not (Test-StageAlreadyComplete 13)) {
                 switch -Regex ($choice) {
                     '^[Ss]' { break }
                     '^[Qq]' {
+                        Write-SetupEvent "QUIT: User quit at pairing"
                         Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                        try { Stop-Transcript } catch { $null }
                         exit 0
                     }
                     default { Write-Info "Retrying..." }
                 }
-                if ($choice -match '^[Ss]') { break }
+                if ($choice -match '^[Ss]') {
+                    Add-Skip -StageNum 13 -StepName "Phone pairing"
+                    break
+                }
             } else {
                 $retry = Read-Host "  Try a different code? (y/n)"
                 if ($retry -notmatch '^[Yy]') { break }
@@ -1490,7 +1639,17 @@ if (-not (Test-StageAlreadyComplete 13)) {
 # =============================================================================
 
 if (-not (Test-StageAlreadyComplete 14)) {
+    $Script:CurrentStage = 14
+    Write-SetupEvent "START: Stage 14 - End-to-End Test"
     Show-StageHeader 14 $Script:TotalStages "End-to-End Test"
+
+    if ($Script:SkippedStages -match "^13:") {
+        Write-Warn "NOTE: You skipped phone pairing in Stage 13."
+        Write-Warn "The bot will NOT reply until pairing is done."
+        Write-Plain "  To pair later, run:  openclaw pairing list --channel telegram"
+        Write-Plain "  Then:                openclaw pairing approve <code>"
+        Write-Host ""
+    }
 
     Write-Plain "Moment of truth. Send your bot a real message from Telegram."
     Write-Host ""
@@ -1613,9 +1772,39 @@ if (-not (Test-StageAlreadyComplete 14)) {
 # STAGE 15: All Done!
 # =============================================================================
 
+$Script:CurrentStage = 15
+Write-SetupEvent "START: Stage 15 - All Done!"
 Save-Progress 15
 
 Show-StageHeader 15 $Script:TotalStages "All Done!"
+Write-Progress -Activity "MikeBot Setup" -Completed
+
+# -------------------------------------------------------------------------
+# Summary dashboard — show each stage's status at a glance
+# -------------------------------------------------------------------------
+Write-Host ""
+Write-Host "  Setup Summary:" -ForegroundColor White
+Write-Host "  --------------" -ForegroundColor White
+for ($i = 1; $i -le $Script:TotalStages; $i++) {
+    $name = $StageNames[$i].PadRight(38)
+    $status = if ($Script:StageResults.ContainsKey($i)) { $Script:StageResults[$i] } else { "OK" }
+    $color = switch ($status) {
+        "OK"      { "Green" }
+        "SKIPPED" { "Yellow" }
+        default   { "Red" }
+    }
+    Write-Host "  Stage $($i.ToString().PadLeft(2)): $name" -NoNewline
+    Write-Host "[$status]" -ForegroundColor $color
+}
+Write-Host ""
+
+if ($Script:SkippedStages.Count -gt 0) {
+    Write-Warn "Some steps were skipped:"
+    foreach ($skip in $Script:SkippedStages) {
+        Write-Plain "  - Stage $skip"
+    }
+    Write-Host ""
+}
 
 Write-Host ""
 Write-Host "  Congratulations Mike -- your bot is set up." -ForegroundColor Green
@@ -1697,6 +1886,8 @@ $logContent = @"
 - Setup progress (safe to delete): ``$ProgressFile``
 - Temporary secrets file (DELETE after a few days): ``$EnvFile``
 - Dashboard token (keep this one): ``$TokenFile``
+- Setup transcript (full console log): ``$TranscriptFile``
+- Setup event log (timeline): ``$EventLogFile``
 - OpenClaw config: ``%USERPROFILE%\.openclaw\``
 
 ## To Get Dashboard Token
@@ -1714,10 +1905,19 @@ Open PowerShell and run:
 
 "@
 
+if ($Script:SkippedStages.Count -gt 0) {
+    $logContent += "`n## Skipped Steps`n`n"
+    foreach ($skip in $Script:SkippedStages) {
+        $logContent += "- Stage $skip`n"
+    }
+}
+
 if (-not (Test-Path $ProgressDir)) { New-Item -ItemType Directory -Path $ProgressDir -Force | Out-Null }
 $logContent | Set-Content -Path $LogFile -Encoding UTF8
 Write-Plain "Setup log saved to: $LogFile"
+Write-Plain "Full transcript saved to: $TranscriptFile"
 Write-Host ""
 Write-Plain "You can close this window now. Your bot will keep running in the background."
 Write-Host ""
+try { Stop-Transcript } catch { $null }
 Wait-ForReturn "Press Enter to close..."

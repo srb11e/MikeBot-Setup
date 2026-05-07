@@ -120,7 +120,7 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
     try {
         $deep = & openclaw status --deep 2>&1
         Note "Deep status:"
-        $deep | Select-Object -First 15 | ForEach-Object { Plain "    $_" }
+        $deep | Select-Object -First 30 | ForEach-Object { Plain "    $_" }
     } catch { $null }
 
     try {
@@ -129,10 +129,22 @@ if (Get-Command openclaw -ErrorAction SilentlyContinue) {
             OK "openclaw doctor passed."
         } else {
             Note "openclaw doctor reported issues:"
-            $doctor | Select-Object -First 10 | ForEach-Object { Plain "    $_" }
+            $doctor | Select-Object -First 20 | ForEach-Object { Plain "    $_" }
         }
     } catch {
         Note "Couldn't run openclaw doctor: $($_.Exception.Message)"
+    }
+
+    try {
+        $logs = & openclaw logs --limit 10 2>&1
+        if ($LASTEXITCODE -eq 0 -and $logs) {
+            Note "Recent log entries (last 10):"
+            $logs | ForEach-Object { Plain "    $_" }
+        } else {
+            Note "No recent logs available."
+        }
+    } catch {
+        Note "Couldn't read logs: $($_.Exception.Message)"
     }
 
     # Config peek (don't print sensitive values)
@@ -205,6 +217,23 @@ if (Test-Path $progressDir) {
     Get-ChildItem $progressDir -Force | ForEach-Object {
         $size = if ($_.Length -lt 1024) { "$($_.Length) B" } else { "$([math]::Round($_.Length/1024,1)) KB" }
         Plain "    $($_.Name) ($size)"
+    }
+
+    # Show recent event log entries (timeline of what happened during setup)
+    $eventLog = Join-Path $progressDir "setup-events.log"
+    if (Test-Path $eventLog) {
+        Note "Recent setup events (last 15 lines):"
+        Get-Content $eventLog | Select-Object -Last 15 | ForEach-Object { Plain "    $_" }
+    }
+
+    # List transcript files so Shands knows which to request
+    $transcripts = Get-ChildItem $progressDir -Filter "setup-transcript-*.log" -Force
+    if ($transcripts) {
+        Note "Transcript files (send to Shands for diagnosis):"
+        foreach ($t in $transcripts) {
+            $size = if ($t.Length -lt 1024) { "$($t.Length) B" } else { "$([math]::Round($t.Length/1024,1)) KB" }
+            Plain "    $($t.Name) ($size) -- $($t.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))"
+        }
     }
 } else {
     Note "No setup folder found (this is fine if setup never ran)."

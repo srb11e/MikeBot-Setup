@@ -18,6 +18,10 @@
 
         # Test-CommandExists — the plural reads naturally ("does this command exist?").
         # Renaming to Test-CommandExist would be grammatically awkward.
-        'PSUseSingularNouns'
+        'PSUseSingularNouns',
+
+        # File contains em-dashes in comments/strings (from user-facing text).
+        # BOM is not required for PowerShell 5.1+ to handle UTF-8 correctly.
+        'PSUseBOMForUnicodeEncodedFile'
     )
 }
