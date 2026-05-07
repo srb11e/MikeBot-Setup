@@ -251,7 +251,7 @@ function Install-WithWinget {
     $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
 
     if (-not $completed) {
-        try { $proc.Kill() } catch { }
+        try { $proc.Kill() } catch { $null }
         Write-Fail "$DisplayName install timed out after $($TimeoutSeconds/60) minutes."
         Write-Plain "  This is a Windows Package Manager issue, not your fault."
         return $false
@@ -662,7 +662,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
             $sourceReady = $sourceProc.WaitForExit(120000)  # 2 minute timeout
 
             if (-not $sourceReady) {
-                try { $sourceProc.Kill() } catch { }
+                try { $sourceProc.Kill() } catch { $null }
                 Write-Warn "Windows Package Manager did not respond within 2 minutes."
                 $wsOk = $false
             } elseif ($sourceProc.ExitCode -ne 0) {
@@ -1112,7 +1112,7 @@ if (-not (Test-StageAlreadyComplete 9)) {
     # -------------------------------------------------------------------------
     $ocCmd = Get-Command "openclaw" -ErrorAction SilentlyContinue
     $ocDir = Join-Path $env:USERPROFILE ".openclaw"
-    $ocExists = ($ocCmd -ne $null) -or (Test-Path $ocDir)
+    $ocExists = ($null -ne $ocCmd) -or (Test-Path $ocDir)
 
     if ($ocExists) {
         Write-Host ""
@@ -1651,14 +1651,14 @@ Write-Host ""
 function Get-VersionSafe {
     param(
         [string]$Command,
-        [string]$Args = "--version"
+        [string]$VersionFlag = "--version"
     )
     try {
-        $result = & $Command $Args 2>&1 | Select-Object -First 1
+        $result = & $Command $VersionFlag 2>&1 | Select-Object -First 1
         if ($LASTEXITCODE -eq 0 -and $result) {
             return $result.ToString().Trim()
         }
-    } catch { }
+    } catch { $null }
     return "not detected"
 }
 
