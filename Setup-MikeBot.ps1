@@ -645,50 +645,69 @@ if (-not (Test-StageAlreadyComplete 4)) {
             exit 1
         }
 
-        # Quick winget readiness check with visible output and timeout.
+        # -----------------------------------------------------------------
+        # Winget source update with real retry loop
+        # -----------------------------------------------------------------
         # winget source update refreshes the package catalog. It can hang
-        # on first run if Microsoft Store source needs setup.
-        Write-Info "Preparing Windows Package Manager (this may take a moment)..."
-        $sourceProc = Start-Process -FilePath "winget" `
-            -ArgumentList @("source", "update") `
-            -PassThru -NoNewWindow
-        $sourceReady = $sourceProc.WaitForExit(120000)  # 2 minute timeout
+        # on first run if the Microsoft Store source needs setup.
+        $wsAttempt = 0
+        $wsMaxAttempts = 3
+        $wsOk = $false
+        do {
+            $wsAttempt++
+            Write-Info "Preparing Windows Package Manager (attempt $wsAttempt)..."
+            $sourceProc = Start-Process -FilePath "winget" `
+                -ArgumentList @("source", "update") `
+                -PassThru -NoNewWindow
+            $sourceReady = $sourceProc.WaitForExit(120000)  # 2 minute timeout
 
-        if (-not $sourceReady) {
-            try { $sourceProc.Kill() } catch { }
-            Write-Warn "Windows Package Manager appears stuck or unavailable."
-            Write-Plain ""
-            Write-Plain "  This is a Windows issue, not your fault. winget may be doing"
-            Write-Plain "  first-time setup or waiting on the Microsoft Store."
-            Write-Host ""
-            Write-Plain "  You can try these instead:"
-            Write-Plain ""
-            Write-Plain "    r = Retry the winget preparation step"
-            Write-Plain "    m = Manual install instructions (Git, Node, Telegram)"
-            Write-Plain "    q = Quit and save progress"
-            Write-Host ""
-            $wsChoice = Read-Host "  Choose (r/m/q)"
-            if ($wsChoice -match '^[Mm]') {
-                Write-Plain ""
-                Write-Plain "  Install these from their official websites, then re-run this setup:"
-                Write-Plain "    Git for Windows:      https://git-scm.com/download/win"
-                Write-Plain "    Node.js LTS:          https://nodejs.org  (pick the LTS version)"
-                Write-Plain "    Telegram Desktop:     https://desktop.telegram.org"
-                Write-Host ""
-                Write-Plain "  After installing, double-click Setup-MikeBot.bat again."
-                Write-Plain "  The setup will detect Git and Node and skip winget."
-                Show-SupportBlock -StageNum 4 -StageName "Install Foundation Tools" `
-                    -StepName "winget source update" `
-                    -ErrorDetail "winget source update timed out after 2 minutes"
-                Wait-ForReturn "Press Enter to exit..."
-                exit 0
-            } elseif ($wsChoice -match '^[Qq]') {
-                Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
-                exit 0
+            if (-not $sourceReady) {
+                try { $sourceProc.Kill() } catch { }
+                Write-Warn "Windows Package Manager did not respond within 2 minutes."
+                $wsOk = $false
+            } elseif ($sourceProc.ExitCode -ne 0) {
+                Write-Warn "Windows Package Manager source update failed (exit code $($sourceProc.ExitCode))."
+                $wsOk = $false
+            } else {
+                Write-Success "Windows Package Manager is ready."
+                $wsOk = $true
             }
-            # else: retry -- loop back by continuing to the install block
-        }
-        Write-Success "Windows Package Manager is ready."
+
+            if (-not $wsOk) {
+                $capped = ($wsAttempt -ge $wsMaxAttempts)
+                Write-Plain ""
+                Write-Plain "  This is a Windows issue, not your fault."
+                Write-Plain "  winget may be doing first-time setup or waiting on the"
+                Write-Plain "  Microsoft Store."
+                Write-Host ""
+                if (-not $capped) {
+                    Write-Plain "    r = Retry the winget preparation step"
+                }
+                Write-Plain "    m = Manual install instructions (Git, Node, Telegram)"
+                Write-Plain "    q = Quit and save progress"
+                Write-Host ""
+                $wsChoice = Read-Host "  Choose ($(if (-not $capped) {'r/'})m/q)"
+                if ($wsChoice -match '^[Mm]') {
+                    Write-Plain ""
+                    Write-Plain "  Install these from their official websites, then re-run this setup:"
+                    Write-Plain "    Git for Windows:      https://git-scm.com/download/win"
+                    Write-Plain "    Node.js LTS:          https://nodejs.org  (pick the LTS version)"
+                    Write-Plain "    Telegram Desktop:     https://desktop.telegram.org"
+                    Write-Host ""
+                    Write-Plain "  After installing, double-click Setup-MikeBot.bat again."
+                    Write-Plain "  The setup will detect Git and Node and skip winget."
+                    Show-SupportBlock -StageNum 4 -StageName "Install Foundation Tools" `
+                        -StepName "winget source update" `
+                        -ErrorDetail "winget source update failed after $wsAttempt attempt(s)"
+                    Wait-ForReturn "Press Enter to exit..."
+                    exit 0
+                } elseif ($wsChoice -match '^[Qq]') {
+                    Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                    exit 0
+                }
+                # r (retry): loop again if not capped; fall through to retry
+            }
+        } while (-not $wsOk)
         Write-Host ""
 
         $installs = @(
@@ -712,29 +731,55 @@ if (-not (Test-StageAlreadyComplete 4)) {
         # Pick up the new tools without restarting the shell
         Update-EnvironmentPath
 
+        # -----------------------------------------------------------------
+        # Verify foundation tools: git, node, AND npm are hard gates.
+        # Telegram Desktop is optional/convenience.
+        # -----------------------------------------------------------------
         Write-Host ""
-        Write-Info "Verifying installs..."
-        if (Test-CommandExists "git")  { Write-Success "git is available."  } else { Write-Warn "git not found in PATH yet -- may need a restart." }
-        if (Test-CommandExists "node") {
+        Write-Info "Verifying foundation tools..."
+        $gitOk  = Test-CommandExists "git"
+        $nodeOk = Test-CommandExists "node"
+        $npmOk  = Test-CommandExists "npm"
+        $allOk  = $gitOk -and $nodeOk -and $npmOk
+
+        if ($gitOk)  { Write-Success "git is available." }
+        else         { Write-Fail   "git not found." }
+        if ($nodeOk) {
             $nodeVer = & node --version 2>$null
             Write-Success "node is available ($nodeVer)."
         } else {
-            Write-Warn "node not found in PATH yet."
+            Write-Fail "node not found."
+        }
+        if ($npmOk)  {
+            $npmVer = & npm --version 2>$null
+            Write-Success "npm is available ($npmVer)."
+        } else {
+            Write-Fail "npm not found."
+        }
+
+        if (-not $allOk) {
             Write-Plain ""
-            Write-Plain "  This is common -- the PATH changes haven't reached this window yet."
-            Write-Plain "  I can restart this script automatically. You won't lose progress."
+            Write-Warn "One or more required tools are still missing from PATH."
+            Write-Plain ""
+            Write-Plain "  This is often because the PATH changes from winget"
+            Write-Plain "  haven't reached this window yet. A restart usually fixes it."
+            Write-Plain ""
+            Write-Plain "  r = Restart this script now (you won't lose progress)"
+            Write-Plain "  q = Quit, re-run Setup-MikeBot.bat manually after restarting"
             Write-Host ""
-            $restartChoice = Read-Host "  Restart automatically now? (Enter = yes, n = close and re-run manually)"
-            if ($restartChoice -notmatch '^[Nn]') {
+            $restartChoice = Read-Host "  Choose (r/q)"
+            if ($restartChoice -notmatch '^[Qq]') {
                 Write-Info "Restarting..."
                 Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
                 exit 0
             } else {
-                Write-Plain "  Close this window, then double-click Setup-MikeBot.bat to resume."
+                Write-Plain "  Close this window, restart, then double-click Setup-MikeBot.bat."
                 Wait-ForReturn "Press Enter to close..."
                 exit 0
             }
         }
+
+        Write-Success "All foundation tools (Git, Node, npm) are ready."
     }
 
     Save-Progress 4
