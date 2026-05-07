@@ -98,6 +98,16 @@ function Show-SupportBlock {
 }
 
 # -----------------------------------------------------------------------------
+# EXIT HELPER -- ensures transcript is finalized on every exit path
+# -----------------------------------------------------------------------------
+
+function Exit-Setup {
+    param([int]$Code = 0)
+    try { Stop-Transcript | Out-Null } catch { $null }
+    exit $Code
+}
+
+# -----------------------------------------------------------------------------
 # GLOBAL ERROR TRAP -- catches unhandled terminating errors
 # -----------------------------------------------------------------------------
 # Mike never sees a naked stack trace. Instead he gets a support block
@@ -114,9 +124,8 @@ trap {
     Write-Host "  Send that file to Shands only. It may contain setup details." -ForegroundColor White
     Write-Host ""
     try { Write-SetupEvent "CRASH: Stage $Script:CurrentStage - $($_.Exception.Message)" } catch { $null }
-    try { Stop-Transcript } catch { $null }
     Read-Host "Press Enter to close" | Out-Null
-    exit 1
+    Exit-Setup 1
 }
 
 # -----------------------------------------------------------------------------
@@ -284,7 +293,7 @@ function Assert-ToolAvailable {
     Write-Plain "  Your progress is saved -- it will resume from $NextStage."
     Write-Plain ""
     Wait-ForReturn "Press Enter to close..."
-    exit 0
+    Exit-Setup 0
 }
 
 # -----------------------------------------------------------------------------
@@ -399,35 +408,31 @@ function Invoke-WithRetrySkipQuit {
         Write-Plain "    s) Skip and continue to the next step"
         Write-Plain "    q) Quit (your progress is saved -- you can resume later)"
         Write-Host ""
-        $choice = Read-Host "  Choose ($(if (-not $capped) {'r/'})s/q)"
-        switch -Regex ($choice) {
-            '^[Rr]' {
-                if ($capped) {
-                    Write-Plain "  Retry is no longer available for this step. Choose s or q."
-                } else {
-                    Write-SetupEvent "RETRY: $StepName (attempt $($attempts+1))"
-                    Write-Info "Retrying..."; continue
-                }
-            }
-            '^[Ss]' {
+
+        $retryAction = $false
+        do {
+            $choice = Read-Host "  Choose ($(if (-not $capped) {'r/'})s/q)"
+            if ($choice -match '^[Ss]') {
                 Add-Skip -StageNum $Script:CurrentStage -StepName $StepName
                 return $false
-            }
-            '^[Qq]' {
+            } elseif ($choice -match '^[Qq]') {
                 Write-SetupEvent "QUIT: User quit at $StepName"
                 Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
-                try { Stop-Transcript } catch { $null }
-                exit 0
-            }
-            default {
+                Exit-Setup 0
+            } elseif ($choice -match '^[Rr]' -and -not $capped) {
+                Write-SetupEvent "RETRY: $StepName (attempt $($attempts+1))"
+                Write-Info "Retrying..."
+                $retryAction = $true
+            } else {
                 if ($capped) {
-                    Write-Plain "  Retry is no longer available for this step. Choose s or q."
+                    Write-Plain "  Retry is no longer available. Choose s or q."
                 } else {
-                    Write-SetupEvent "RETRY: $StepName (attempt $($attempts+1))"
-                    Write-Info "Retrying..."; continue
+                    Write-Plain "  Choose r, s, or q."
                 }
             }
-        }
+        } while (-not $retryAction)
+
+        if ($retryAction) { continue }
     }
 }
 
@@ -488,7 +493,7 @@ try {
     Write-Plain "Connect to Wi-Fi or Ethernet and try again."
     Write-Plain "If you're connected and still see this, text Shands."
     Wait-ForReturn "Press Enter to close this window..."
-    exit 1
+    Exit-Setup 1
 }
 
 # -----------------------------------------------------------------------------
@@ -575,7 +580,7 @@ if (-not (Test-StageAlreadyComplete 1)) {
         Show-SupportBlock -StageNum 1 -StageName "Windows Version Check" `
             -StepName "Build check" -ErrorDetail "Build $build is below 19041"
         Wait-ForReturn "Press Enter to exit..."
-        exit 1
+        Exit-Setup 1
     } else {
         Write-Success "Your Windows version is fine."
     }
@@ -750,9 +755,9 @@ if (-not (Test-StageAlreadyComplete 4)) {
         if ($restartChoice -match '^[Rr]') {
             Write-Info "Restarting script..."
             & $PSCommandPath
-            exit 0
+            Exit-Setup 0
         } else {
-            exit 0
+            Exit-Setup 0
         }
     } else {
         # -----------------------------------------------------------------
@@ -777,7 +782,7 @@ if (-not (Test-StageAlreadyComplete 4)) {
                 -StepName "winget not found" `
                 -ErrorDetail "winget is not installed on this laptop"
             Wait-ForReturn "Press Enter to exit..."
-            exit 1
+            Exit-Setup 1
         }
 
         # -----------------------------------------------------------------
@@ -821,26 +826,37 @@ if (-not (Test-StageAlreadyComplete 4)) {
                 Write-Plain "    m = Manual install instructions (Git, Node, Telegram)"
                 Write-Plain "    q = Quit and save progress"
                 Write-Host ""
-                $wsChoice = Read-Host "  Choose ($(if (-not $capped) {'r/'})m/q)"
-                if ($wsChoice -match '^[Mm]') {
-                    Write-Plain ""
-                    Write-Plain "  Install these from their official websites, then re-run this setup:"
-                    Write-Plain "    Git for Windows:      https://git-scm.com/download/win"
-                    Write-Plain "    Node.js LTS:          https://nodejs.org  (pick the LTS version)"
-                    Write-Plain "    Telegram Desktop:     https://desktop.telegram.org"
-                    Write-Host ""
-                    Write-Plain "  After installing, double-click Setup-MikeBot.bat again."
-                    Write-Plain "  The setup will detect Git and Node and skip winget."
-                    Show-SupportBlock -StageNum 4 -StageName "Install Foundation Tools" `
-                        -StepName "winget source update" `
-                        -ErrorDetail "winget source update failed after $wsAttempt attempt(s)"
-                    Wait-ForReturn "Press Enter to exit..."
-                    exit 0
-                } elseif ($wsChoice -match '^[Qq]') {
-                    Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
-                    exit 0
-                }
-                # r (retry): loop again if not capped; fall through to retry
+
+                $wsRetry = $false
+                do {
+                    $wsChoice = Read-Host "  Choose ($(if (-not $capped) {'r/'})m/q)"
+                    if ($wsChoice -match '^[Mm]') {
+                        Write-Plain ""
+                        Write-Plain "  Install these from their official websites, then re-run this setup:"
+                        Write-Plain "    Git for Windows:      https://git-scm.com/download/win"
+                        Write-Plain "    Node.js LTS:          https://nodejs.org  (pick the LTS version)"
+                        Write-Plain "    Telegram Desktop:     https://desktop.telegram.org"
+                        Write-Host ""
+                        Write-Plain "  After installing, double-click Setup-MikeBot.bat again."
+                        Write-Plain "  The setup will detect Git, Node, and npm and skip winget."
+                        Show-SupportBlock -StageNum 4 -StageName "Install Foundation Tools" `
+                            -StepName "winget source update" `
+                            -ErrorDetail "winget source update failed after $wsAttempt attempt(s)"
+                        Wait-ForReturn "Press Enter to exit..."
+                        Exit-Setup 0
+                    } elseif ($wsChoice -match '^[Qq]') {
+                        Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
+                        Exit-Setup 0
+                    } elseif ($wsChoice -match '^[Rr]' -and -not $capped) {
+                        $wsRetry = $true
+                    } else {
+                        if ($capped) {
+                            Write-Plain "  Retry is no longer available. Choose m or q."
+                        } else {
+                            Write-Plain "  Choose r, m, or q."
+                        }
+                    }
+                } while (-not $wsRetry)
             }
         } while (-not $wsOk)
         Write-Host ""
@@ -906,11 +922,11 @@ if (-not (Test-StageAlreadyComplete 4)) {
             if ($restartChoice -notmatch '^[Qq]') {
                 Write-Info "Restarting..."
                 Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
-                exit 0
+                Exit-Setup 0
             } else {
                 Write-Plain "  Close this window, restart, then double-click Setup-MikeBot.bat."
                 Wait-ForReturn "Press Enter to close..."
-                exit 0
+                Exit-Setup 0
             }
         }
 
@@ -1058,7 +1074,7 @@ if (-not (Test-StageAlreadyComplete 6)) {
                     }
                     '^[Qq]' {
                         Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
-                        exit 0
+                        Exit-Setup 0
                     }
                     default { Write-Info "Retrying..." }
                 }
@@ -1156,7 +1172,7 @@ if (-not (Test-StageAlreadyComplete 7)) {
                     }
                     '^[Qq]' {
                         Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
-                        exit 0
+                        Exit-Setup 0
                     }
                     default { Write-Info "Retrying..." }
                 }
@@ -1189,7 +1205,7 @@ if (-not (Test-StageAlreadyComplete 8)) {
         Show-SupportBlock -StageNum 8 -StageName "Test the API Key" `
             -StepName "Load API key" -ErrorDetail "DEEPSEEK_API_KEY not found in .env"
         Wait-ForReturn "Press Enter to exit..."
-        exit 1
+        Exit-Setup 1
     }
 
     $null = Invoke-WithRetrySkipQuit -StepName "Testing DeepSeek API key" -Action {
@@ -1285,7 +1301,7 @@ if (-not (Test-StageAlreadyComplete 9)) {
             Write-Plain "  If you're re-running the setup on Mike's laptop, re-run"
             Write-Plain "  and type SETUP-MIKEBOT when prompted."
             Wait-ForReturn "Press Enter to close..."
-            exit 0
+            Exit-Setup 0
         }
         Write-Info "Override accepted. Continuing with setup..."
     }
@@ -1391,7 +1407,7 @@ if (-not (Test-StageAlreadyComplete 10)) {
         Show-SupportBlock -StageNum 10 -StageName "OpenClaw Onboarding" `
             -StepName "Load saved keys" -ErrorDetail "$missing not found in .env"
         Wait-ForReturn "Press Enter to exit..."
-        exit 1
+        Exit-Setup 1
     }
 
     $env:DEEPSEEK_API_KEY      = $dsKey
@@ -1488,7 +1504,7 @@ if (-not (Test-StageAlreadyComplete 11)) {
         if ($force -ne "continue anyway") {
             Write-SetupEvent "QUIT: Gateway unhealthy, user stopped"
             Write-Info "Stopping. Run Setup-MikeBot.bat again after fixing the gateway."
-            exit 0
+            Exit-Setup 0
         }
         Write-SetupEvent "OVERRIDE: User continued despite gateway failure"
     }
@@ -1648,8 +1664,7 @@ if (-not (Test-StageAlreadyComplete 13)) {
                     '^[Qq]' {
                         Write-SetupEvent "QUIT: User quit at pairing"
                         Write-Info "Progress saved. Double-click Setup-MikeBot.bat to resume."
-                        try { Stop-Transcript } catch { $null }
-                        exit 0
+                        Exit-Setup 0
                     }
                     default { Write-Info "Retrying..." }
                 }
