@@ -40,6 +40,18 @@ $ProgressPreference = "SilentlyContinue"
 $ShandsPublicKey = "ssh-ed25519 REPLACE_WITH_SHANDS_PUBLIC_KEY shands-remote-help-mikebot"
 
 # -----------------------------------------------------------------------------
+# VERIFY PUBLIC KEY IS SET
+# -----------------------------------------------------------------------------
+if ($ShandsPublicKey -match 'REPLACE_WITH') {
+    Write-Host ""
+    Write-Host "  [X] Shands's SSH public key has not been configured." -ForegroundColor Red
+    Write-Host "      Open this script and replace REPLACE_WITH_SHANDS_PUBLIC_KEY" -ForegroundColor Red
+    Write-Host "      with Shands's actual ed25519 public key." -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
+
+# -----------------------------------------------------------------------------
 # PATHS
 # -----------------------------------------------------------------------------
 $ProgressDir  = Join-Path $env:LOCALAPPDATA "MikeBot-Setup"
@@ -190,21 +202,40 @@ if ($tailscaleExe) {
     try {
         $tsStatus = & tailscale status --json 2>$null | ConvertFrom-Json
         if ($tsStatus.Self.Online) {
-            Write-Success "Tailscale is already connected as: $($tsStatus.Self.HostName)"
+            Write-Warn "Tailscale is already connected as: $($tsStatus.Self.HostName)"
+            Write-Warn "It may be connected to a different Tailscale network."
+            Write-Plain ""
+            Write-Plain "  Remote Help requires Tailscale to be connected to Shands's"
+            Write-Plain "  tailnet with the tag: mikebot-support"
+            Write-Plain ""
+            $alreadyChoice = Read-Host "  Continue anyway? Shands can verify the tailnet. (y/n)"
+            if ($alreadyChoice -notmatch '^[Yy]') {
+                Write-Plain "  Stopping. Disconnect Tailscale from your system tray first,"
+                Write-Plain "  then run this script again."
+                Write-Log "TAILSCALE: already connected, user chose to stop"
+                exit 0
+            }
+            Write-Info "Proceeding. Shands should verify your Tailscale node is on the right tailnet."
             $tailscaleWasAlreadyConnected = $true
         }
     } catch { $null }
 } else {
     Write-Info "Tailscale not found. Installing..."
     try {
-        $proc = Start-Process -FilePath "winget" -ArgumentList @("install", "tailscale.tailscale", "--exact", "--silent", "--accept-source-agreements", "--accept-package-agreements") -Wait -PassThru -NoNewWindow
-        if ($proc.ExitCode -eq 0) {
+        $wingetProc = Start-Process -FilePath "winget" -ArgumentList @("install", "tailscale.tailscale", "--exact", "--silent", "--accept-source-agreements", "--accept-package-agreements") -PassThru -NoNewWindow
+        $wingetTimeout = 600
+        $wingetExited = $wingetProc.WaitForExit($wingetTimeout * 1000)
+        if (-not $wingetExited) {
+            $wingetProc.Kill()
+            throw "winget timed out after $wingetTimeout seconds"
+        }
+        if ($wingetProc.ExitCode -eq 0) {
             Write-Success "Tailscale installed via winget."
         } else {
-            throw "winget failed"
+            throw "winget failed with exit code $($wingetProc.ExitCode)"
         }
     } catch {
-        Write-Warn "Could not install Tailscale via winget."
+        Write-Warn "Could not install Tailscale via winget ($($_.Exception.Message))."
         Write-Plain "Opening https://tailscale.com/download/windows in your browser."
         Write-Plain "Download and install Tailscale, then press Enter."
         Start-Process "https://tailscale.com/download/windows"
@@ -255,7 +286,7 @@ if (-not $tailscaleWasAlreadyConnected) {
             exit 1
         }
 
-        $env:TS_AUTH_KEY = ***
+        $env:TS_AUTH_KEY = $plainKey
     } finally {
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
@@ -362,20 +393,18 @@ if ($sshCap -and $sshCap.State -eq 'Installed') {
     }
 }
 
-# 5b. Check sshd service state
+# 5b. Record sshd service state (do NOT start yet — wait until config is safe)
 $sshService = Get-Service sshd -ErrorAction SilentlyContinue
+$sshServiceStatusBefore = $null
+$sshServiceStartupTypeBefore = $null
 if ($sshService) {
+    $sshServiceStatusBefore = $sshService.Status.ToString()
+    $sshServiceStartupTypeBefore = $sshService.StartType.ToString()
+    Write-Info "SSH server current state: $sshServiceStatusBefore (startup: $sshServiceStartupTypeBefore)"
+    Write-Log "OPENSSH: sshd status=$sshServiceStatusBefore, startup=$sshServiceStartupTypeBefore"
     if ($sshService.Status -eq 'Running') {
         $sshWasAlreadyRunning = $true
-        Write-Success "SSH server is already running."
-        Write-Log "OPENSSH: sshd was already running"
-    } else {
-        Write-Info "Starting SSH server..."
-        Start-Service sshd
-        Write-Success "SSH server started."
     }
-    Set-Service sshd -StartupType Automatic
-    Write-Log "OPENSSH: sshd startup type set to Automatic"
 } else {
     Write-Fail "sshd service not found after install. Try restarting your laptop."
     Write-Log "FAIL: sshd service not found"
@@ -507,9 +536,8 @@ ChallengeResponseAuthentication no
     Write-Success "MikeBot block inserted into sshd_config."
     Write-Log "SSHD_CONFIG: block inserted at line $insertAt"
 
-    # Restart sshd to pick up changes
-    Restart-Service sshd
-    Write-Success "SSH server restarted with new config."
+    # Config will be picked up when sshd starts in the final phase
+    Write-Success "sshd_config updated. SSHD will use new config when started."
 
     $modifiedSshdConfig = $true
     $sshdConfigBackup = $backup
@@ -619,7 +647,7 @@ if ($authKeyType -eq "administrators") {
     }
 } else {
     $userSid = $currentUser.User.Value
-    icacls.exe $authKeysPath /inheritance:r /grant "NT AUTHORITY\SYSTEM:(F)" /grant "$userSid`:(R)" 2>$null
+    icacls.exe $authKeysPath /inheritance:r /grant "NT AUTHORITY\SYSTEM:(F)" /grant "$userSid`:(M)" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "Could not set ACL on authorized_keys. Ensure only you can read this file."
     } else {
@@ -632,7 +660,27 @@ Write-Log "AUTH_KEYS: key added to $authKeysPath ($authKeyType)"
 $addedAuthorizedKey = $true
 
 # -----------------------------------------------------------------------------
-# PHASE 9 — REPORT
+# PHASE 9 — START SSHD (only after all config is safe)
+# -----------------------------------------------------------------------------
+Write-Host ""
+Write-Host "--- Starting SSH Server ---" -ForegroundColor White
+
+if ($sshService.Status -ne 'Running') {
+    Write-Info "Starting SSH server..."
+    Start-Service sshd
+    Write-Success "SSH server started."
+} else {
+    Write-Info "SSH server was already running. Restarting to pick up config changes."
+    Restart-Service sshd
+    Write-Success "SSH server restarted with new config."
+}
+
+Set-Service sshd -StartupType Automatic
+Write-Success "SSH server startup set to Automatic."
+Write-Log "OPENSSH: sshd started, StartupType set to Automatic"
+
+# -----------------------------------------------------------------------------
+# PHASE 10 — REPORT
 # -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
@@ -659,7 +707,7 @@ Write-Plain "  The connection is active while Tailscale is connected."
 Write-Host ""
 
 # -----------------------------------------------------------------------------
-# PHASE 10 — WRITE STATE FILE
+# PHASE 11 — WRITE STATE FILE
 # -----------------------------------------------------------------------------
 $state = @{
     enabled                       = $true
@@ -679,6 +727,8 @@ $state = @{
     authorizedKeysPath            = $authKeysPath
     installedOpenSshServer        = $installedByUs
     sshServiceWasAlreadyRunning   = $sshWasAlreadyRunning
+    sshServiceStatusBefore        = $sshServiceStatusBefore
+    sshServiceStartupTypeBefore   = $sshServiceStartupTypeBefore
 }
 $state | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
 Write-Log "COMPLETE: Remote Help enabled, state written"

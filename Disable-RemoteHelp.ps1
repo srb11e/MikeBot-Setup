@@ -113,26 +113,42 @@ Write-Log "CONSENT: user typed DISABLE REMOTE HELP"
 $madeChanges = $false
 
 # -----------------------------------------------------------------------------
-# PHASE 3 — STOP SSHD (only if WE started it)
+# PHASE 3 — STOP SSHD (restore prior state)
 # -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "--- SSH Server ---" -ForegroundColor White
 
+# Determine target state: restore to what it was before Remote Help
+$targetStatus = if ($state.sshServiceStatusBefore) { $state.sshServiceStatusBefore } else { "Stopped" }
+$targetStartup = if ($state.sshServiceStartupTypeBefore) { $state.sshServiceStartupTypeBefore } else { "Disabled" }
+
 if ($state.sshServiceWasAlreadyRunning -eq $false) {
+    # Remote Help started sshd — stop it
     try {
+        if ($targetStatus -eq 'Running') {
+            Write-Warn "sshd was running before Remote Help. Restarting with original startup type."
+        }
         Stop-Service sshd -ErrorAction Stop
-        Set-Service sshd -StartupType Disabled
-        Write-Success "Stopped and disabled SSH server."
-        Write-Log "SSHD: stopped and disabled (was not running before Remote Help)"
+        Set-Service sshd -StartupType $targetStartup
+        if ($targetStatus -eq 'Running') {
+            Start-Service sshd -ErrorAction Stop
+            Write-Success "SSH server stopped and restarted with original startup type ($targetStartup)."
+        } else {
+            Write-Success "SSH server stopped. Startup type restored to $targetStartup."
+        }
+        Write-Log "SSHD: status restored to $targetStatus, startup to $targetStartup"
         $madeChanges = $true
     } catch {
         Write-Warn "Could not stop sshd service. It may have already been stopped."
         Write-Log "SSHD: stop attempt failed (may be already stopped): $($_.Exception.Message)"
     }
 } else {
+    # sshd was running before Remote Help — restore StartupType but leave running
+    Set-Service sshd -StartupType $targetStartup
     Write-Plain "SSH server was already running before Remote Help."
-    Write-Plain "  Leaving it running (Remote Help did not start it)."
-    Write-Log "SSHD: left running (was already running before Remote Help)"
+    Write-Plain "  Leaving it running. Startup type restored to $targetStartup."
+    Write-Log "SSHD: left running, startup restored to $targetStartup"
+}
 }
 
 # -----------------------------------------------------------------------------
@@ -227,22 +243,41 @@ if ($state.addedAuthorizedKey -eq $true) {
 Write-Host ""
 Write-Host "--- Tailscale ---" -ForegroundColor White
 
-Write-Plain "Remote Help SSH access is now disabled."
-Write-Plain ""
-$tsChoice = Read-Host "Disconnect Tailscale too? This removes your laptop from Shands's private network entirely. (y/n)"
-if ($tsChoice -match '^[Yy]') {
-    & tailscale logout 2>$null
-    Write-Success "Tailscale disconnected."
-    Write-Plain "  The Tailscale icon should disappear from your system tray."
-    Write-Plain "  To reconnect later, run Enable-RemoteHelp.ps1 again."
-    Write-Log "TAILSCALE: logged out"
-    $madeChanges = $true
+if ($state.tailscaleJoinedByRemoteHelp -eq $true) {
+    # Remote Help connected Tailscale — strongly recommend disconnect
+    Write-Plain "Remote Help connected Tailscale to Shands's private network."
+    Write-Plain "SSH access is now disabled, but your laptop is still on that network."
+    Write-Plain ""
+    $tsChoice = Read-Host "Disconnect Tailscale? (y/n — recommended: y)"
+    if ($tsChoice -notmatch '^[Nn]') {
+        & tailscale logout 2>$null
+        Write-Success "Tailscale disconnected."
+        Write-Plain "  The Tailscale icon should disappear from your system tray."
+        Write-Plain "  To reconnect later, run Enable-RemoteHelp.ps1 again."
+        Write-Log "TAILSCALE: logged out (joined by Remote Help)"
+        $madeChanges = $true
+    } else {
+        Write-Plain "  Tailscale stays connected. Shands cannot SSH in."
+        Write-Log "TAILSCALE: left connected (joined by Remote Help, user chose to keep)"
+    }
+} elseif ($state.tailscaleWasAlreadyConnected -eq $true) {
+    # Tailscale was already connected before Remote Help — leave it alone
+    Write-Plain "Tailscale was connected before Remote Help was enabled."
+    Write-Plain "  It has NOT been disconnected (Remote Help did not join it)."
+    Write-Plain ""
+    $tsChoice = Read-Host "Disconnect Tailscale anyway? This removes your laptop from Shands's private network. (y/n — default: n)"
+    if ($tsChoice -match '^[Yy]') {
+        & tailscale logout 2>$null
+        Write-Success "Tailscale disconnected."
+        Write-Log "TAILSCALE: logged out (was already connected, user chose to disconnect)"
+        $madeChanges = $true
+    } else {
+        Write-Plain "  Tailscale connection left as-is."
+        Write-Log "TAILSCALE: left as-is (was already connected)"
+    }
 } else {
-    Write-Plain "  Tailscale is still connected."
-    Write-Plain "  Shands cannot SSH in (sshd is off and firewall rule removed),"
-    Write-Plain "  but your laptop remains on the private network."
-    Write-Plain "  The Tailscale icon will stay in your system tray."
-    Write-Log "TAILSCALE: left connected"
+    Write-Plain "Tailscale was not connected. Nothing to disconnect."
+    Write-Log "TAILSCALE: not connected, nothing to do"
 }
 
 # -----------------------------------------------------------------------------

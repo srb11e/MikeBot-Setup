@@ -1,4 +1,4 @@
-# Remote Help v1.1 — Design Document
+﻿# Remote Help v1.1 — Design Document
 
 **Status:** Design approved. Implementation in progress on `feature/remote-help-v1.1`.
 **Target:** v1.1 (not part of v1.0 Mike release).
@@ -60,7 +60,9 @@ for troubleshooting when the bot or setup is stuck.
   "addedAuthorizedKeyTo": "administrators",
   "authorizedKeysPath": "C:\\ProgramData\\ssh\\administrators_authorized_keys",
   "installedOpenSshServer": true,
-  "sshServiceWasAlreadyRunning": false
+  "sshServiceWasAlreadyRunning": false,
+  "sshServiceStatusBefore": "Stopped",
+  "sshServiceStartupTypeBefore": "Disabled"
 }
 ```
 
