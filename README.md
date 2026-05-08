@@ -15,6 +15,14 @@ Turnkey Windows onboarding scripts that walk a non-technical user through instal
 | `PSScriptAnalyzerSettings.psd1` | PSScriptAnalyzer rule suppressions for by-design patterns |
 | `phase0-findings.md` … `phase3-report.md` | Remediation history from the red-team audit |
 
+### Optional v1.1 Support Tools
+
+| File | Purpose |
+|------|---------|
+| `Enable-RemoteHelp.ps1` | Optional. Lets Shands SSH into the laptop over Tailscale for CLI troubleshooting. Requires explicit consent. Not part of normal setup. |
+| `Disable-RemoteHelp.ps1` | Optional. Reverses everything Enable-RemoteHelp.ps1 set up. |
+| `remote-help-v1.1-design.md` | Design document for the Remote Help feature. |
+
 ## Architecture
 
 The setup script walks through:
