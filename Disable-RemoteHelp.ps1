@@ -124,6 +124,7 @@ Write-Success "Consent given."
 Write-Log "CONSENT: user typed DISABLE REMOTE HELP"
 
 $madeChanges = $false
+$cleanupFailures = @()
 
 # -----------------------------------------------------------------------------
 # PHASE 3 — STOP SSHD (restore prior state)
@@ -154,6 +155,7 @@ if ($state.sshServiceWasAlreadyRunning -eq $false) {
     } catch {
         Write-Warn "Could not stop sshd service. It may have already been stopped."
         Write-Log "SSHD: stop attempt failed (may be already stopped): $($_.Exception.Message)"
+        $cleanupFailures += "sshd service stop"
     }
 } else {
     # sshd was running before Remote Help — restore StartupType but leave running
@@ -165,6 +167,7 @@ if ($state.sshServiceWasAlreadyRunning -eq $false) {
     } catch {
         Write-Warn "Could not restore sshd startup type: $($_.Exception.Message)"
         Write-Log "SSHD: Set-Service failed: $($_.Exception.Message)"
+        $cleanupFailures += "sshd startup type restore"
     }
 }
 
@@ -184,6 +187,7 @@ if ($state.createdMikeBotFirewallRule -eq $true) {
     } catch {
         Write-Warn "Could not remove firewall rule: $($_.Exception.Message)"
         Write-Log "FIREWALL: remove failed: $($_.Exception.Message)"
+        $cleanupFailures += "firewall rule removal"
     }
 } else {
     Write-Info "No MikeBot firewall rule found in state. Skipping."
@@ -228,6 +232,7 @@ if ($state.modifiedSshdConfig -eq $true) {
         } catch {
             Write-Warn "Could not update sshd_config: $($_.Exception.Message)"
             Write-Log "SSHD_CONFIG: update failed: $($_.Exception.Message)"
+            $cleanupFailures += "sshd_config update"
         }
     } else {
         Write-Warn "sshd_config not found. MikeBot block may have already been removed."
@@ -252,25 +257,30 @@ if ($state.addedAuthorizedKey -eq $true) {
                 Remove-Item $authPath -Force -ErrorAction Stop
                 Write-Success "Removed Shands's SSH key (file is now empty, deleted)."
                 Write-Log "AUTH_KEYS: file deleted (no keys remaining)"
+                $state.addedAuthorizedKey = $false
+                $madeChanges = $true
             } catch {
                 Write-Warn "Could not remove authorized_keys file: $($_.Exception.Message)"
                 Write-Log "AUTH_KEYS: file remove failed: $($_.Exception.Message)"
+                $cleanupFailures += "authorized_keys file removal"
             }
         } else {
             try {
                 $existing -join "`r`n" | Set-Content $authPath -Encoding ASCII -ErrorAction Stop
                 Write-Success "Removed Shands's SSH key from $authPath."
                 Write-Log "AUTH_KEYS: Shands's key removed, other keys preserved"
+                $state.addedAuthorizedKey = $false
+                $madeChanges = $true
             } catch {
                 Write-Warn "Could not update authorized_keys: $($_.Exception.Message)"
                 Write-Log "AUTH_KEYS: update failed: $($_.Exception.Message)"
+                $cleanupFailures += "authorized_keys update"
             }
         }
-        $madeChanges = $true
     } else {
         Write-Info "Authorized keys file not found. Key may have already been removed."
+        $state.addedAuthorizedKey = $false
     }
-    $state.addedAuthorizedKey = $false
 } else {
     Write-Info "No SSH key was added by Remote Help. Skipping."
 }
@@ -289,11 +299,18 @@ if ($state.tailscaleJoinedByRemoteHelp -eq $true) {
     $tsChoice = Read-Host "Disconnect Tailscale? (y/n — recommended: y)"
     if ($tsChoice -notmatch '^[Nn]') {
         & tailscale logout 2>$null
-        Write-Success "Tailscale disconnected."
-        Write-Plain "  The Tailscale icon should disappear from your system tray."
-        Write-Plain "  To reconnect later, run Enable-RemoteHelp.ps1 again."
-        Write-Log "TAILSCALE: logged out (joined by Remote Help)"
-        $madeChanges = $true
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Tailscale disconnected."
+            Write-Plain "  The Tailscale icon should disappear from your system tray."
+            Write-Plain "  To reconnect later, run Enable-RemoteHelp.ps1 again."
+            Write-Log "TAILSCALE: logged out (joined by Remote Help)"
+            $madeChanges = $true
+        } else {
+            Write-Warn "Tailscale logout returned exit code $LASTEXITCODE."
+            Write-Plain "  It may have already been disconnected, or Tailscale may not be running."
+            Write-Log "TAILSCALE: logout failed, exit code $LASTEXITCODE"
+            $cleanupFailures += "tailscale logout (joined by Remote Help)"
+        }
     } else {
         Write-Plain "  Tailscale stays connected. Shands cannot SSH in."
         Write-Log "TAILSCALE: left connected (joined by Remote Help, user chose to keep)"
@@ -306,9 +323,15 @@ if ($state.tailscaleJoinedByRemoteHelp -eq $true) {
     $tsChoice = Read-Host "Disconnect Tailscale anyway? This removes your laptop from Shands's private network. (y/n — default: n)"
     if ($tsChoice -match '^[Yy]') {
         & tailscale logout 2>$null
-        Write-Success "Tailscale disconnected."
-        Write-Log "TAILSCALE: logged out (was already connected, user chose to disconnect)"
-        $madeChanges = $true
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Tailscale disconnected."
+            Write-Log "TAILSCALE: logged out (was already connected, user chose to disconnect)"
+            $madeChanges = $true
+        } else {
+            Write-Warn "Tailscale logout returned exit code $LASTEXITCODE."
+            Write-Log "TAILSCALE: logout failed, exit code $LASTEXITCODE"
+            $cleanupFailures += "tailscale logout (pre-existing)"
+        }
     } else {
         Write-Plain "  Tailscale connection left as-is."
         Write-Log "TAILSCALE: left as-is (was already connected)"
@@ -333,23 +356,39 @@ if ($state.installedOpenSshServer -eq $true) {
 # -----------------------------------------------------------------------------
 # PHASE 10 — WRITE FINAL STATE
 # -----------------------------------------------------------------------------
-$state.enabled = $false
-$state.failureReason = ""
 $state.timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
 
-# Clean up state fields that no longer apply
-$state | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
-
-Write-Host ""
-Write-Host "================================================================" -ForegroundColor Green
-Write-Host "  Remote Help is OFF" -ForegroundColor Green
-Write-Host "================================================================" -ForegroundColor Green
-Write-Host ""
-Write-Success "Shands can no longer connect to your laptop remotely."
-if ($madeChanges) {
-    Write-Success "All Remote Help settings have been removed."
+if ($cleanupFailures.Count -gt 0) {
+    # Critical cleanup failures — Remote Help may still be partially enabled
+    $state.enabled = $true
+    $state.failureReason = "disablePartialFailure"
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Yellow
+    Write-Host "  Remote Help may still be partially ENABLED" -ForegroundColor Yellow
+    Write-Host "================================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Warn "Not all Remote Help settings could be removed:"
+    foreach ($f in $cleanupFailures) {
+        Write-Plain "    - Failed: $f"
+    }
+    Write-Host ""
+    Write-Plain "  Some Remote Help components may still be active."
+    Write-Plain "  Ask Shands for help before trying to remove them manually."
+    Write-Log "DISABLE: partial failure, $($cleanupFailures.Count) failure(s): $($cleanupFailures -join '; ')"
 } else {
-    Write-Info "No changes were needed (Remote Help was already partially disabled)."
+    $state.enabled = $false
+    $state.failureReason = ""
+    Write-Host ""
+    Write-Host "================================================================" -ForegroundColor Green
+    Write-Host "  Remote Help is OFF" -ForegroundColor Green
+    Write-Host "================================================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Success "Shands can no longer connect to your laptop remotely."
+    if ($madeChanges) {
+        Write-Success "All Remote Help settings have been removed."
+    } else {
+        Write-Info "No changes were needed (Remote Help was already partially disabled)."
+    }
 }
 Write-Host ""
 
