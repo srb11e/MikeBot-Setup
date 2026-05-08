@@ -24,9 +24,8 @@
 #   - Does NOT install anything silently
 #   - Does NOT change your normal MikeBot setup
 #
-# IMPORTANT — SHANDS: Replace the placeholder SSH public key below with
-# your actual public key before shipping this script. Search for:
-#   REPLACE_WITH_SHANDS_PUBLIC_KEY
+# The SSH public key below belongs to Shands's machine (SRBComputer).
+# This public key is safe to commit — only the private key is secret.
 # =============================================================================
 
 $ErrorActionPreference = "Continue"
@@ -37,7 +36,7 @@ $ProgressPreference = "SilentlyContinue"
 # -----------------------------------------------------------------------------
 # Generate with: ssh-keygen -t ed25519 -C "shands-remote-help-mikebot"
 # The PUBLIC key (.pub file) goes here. NEVER put the private key here.
-$ShandsPublicKey = "ssh-ed25519 REPLACE_WITH_SHANDS_PUBLIC_KEY shands-remote-help-mikebot"
+$ShandsPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHABc14IazYzt1XV9JVzL+n5x1fOOKFxJuo8nzeak6XF shands-remote-help-mikebot"
 
 # -----------------------------------------------------------------------------
 # VERIFY PUBLIC KEY IS SET
