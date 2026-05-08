@@ -50,6 +50,19 @@ function Write-Log {
 Write-Log "START: Disable-RemoteHelp.ps1"
 
 # -----------------------------------------------------------------------------
+# PREFLIGHT — Must run as Administrator
+# -----------------------------------------------------------------------------
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Fail "This script must run as Administrator."
+    Write-Plain "Right-click Disable-RemoteHelp.ps1 → Run with PowerShell (as admin)."
+    Write-Log "FAIL: not running as Administrator"
+    exit 1
+}
+Write-Success "Running as Administrator."
+Write-Log "PREFLIGHT: Administrator OK"
+
+# -----------------------------------------------------------------------------
 # PHASE 1 — CHECK STATE
 # -----------------------------------------------------------------------------
 Write-Host ""
@@ -144,11 +157,15 @@ if ($state.sshServiceWasAlreadyRunning -eq $false) {
     }
 } else {
     # sshd was running before Remote Help — restore StartupType but leave running
-    Set-Service sshd -StartupType $targetStartup
-    Write-Plain "SSH server was already running before Remote Help."
-    Write-Plain "  Leaving it running. Startup type restored to $targetStartup."
-    Write-Log "SSHD: left running, startup restored to $targetStartup"
-}
+    try {
+        Set-Service sshd -StartupType $targetStartup -ErrorAction Stop
+        Write-Plain "SSH server was already running before Remote Help."
+        Write-Plain "  Leaving it running. Startup type restored to $targetStartup."
+        Write-Log "SSHD: left running, startup restored to $targetStartup"
+    } catch {
+        Write-Warn "Could not restore sshd startup type: $($_.Exception.Message)"
+        Write-Log "SSHD: Set-Service failed: $($_.Exception.Message)"
+    }
 }
 
 # -----------------------------------------------------------------------------
@@ -158,11 +175,16 @@ Write-Host ""
 Write-Host "--- Windows Firewall ---" -ForegroundColor White
 
 if ($state.createdMikeBotFirewallRule -eq $true) {
-    Remove-NetFirewallRule -DisplayName "MikeBot-RemoteHelp-SSH-Tailscale-Only" -ErrorAction SilentlyContinue
-    Write-Success "Removed MikeBot Tailscale-only firewall rule."
-    Write-Log "FIREWALL: removed MikeBot-RemoteHelp-SSH-Tailscale-Only"
-    $state.createdMikeBotFirewallRule = $false
-    $madeChanges = $true
+    try {
+        Remove-NetFirewallRule -DisplayName "MikeBot-RemoteHelp-SSH-Tailscale-Only" -ErrorAction Stop
+        Write-Success "Removed MikeBot Tailscale-only firewall rule."
+        Write-Log "FIREWALL: removed MikeBot-RemoteHelp-SSH-Tailscale-Only"
+        $state.createdMikeBotFirewallRule = $false
+        $madeChanges = $true
+    } catch {
+        Write-Warn "Could not remove firewall rule: $($_.Exception.Message)"
+        Write-Log "FIREWALL: remove failed: $($_.Exception.Message)"
+    }
 } else {
     Write-Info "No MikeBot firewall rule found in state. Skipping."
 }
@@ -197,14 +219,20 @@ if ($state.modifiedSshdConfig -eq $true) {
     if (Test-Path $SshdConfig) {
         $content = Get-Content $SshdConfig -Raw
         $cleaned = $content -replace "(?ms)\r?\n?# BEGIN MIKEBOT REMOTE HELP.*?# END MIKEBOT REMOTE HELP\r?\n?", ""
-        $cleaned | Set-Content $SshdConfig -Encoding ASCII -NoNewline
-        Write-Success "Removed MikeBot settings from sshd_config."
-        Write-Log "SSHD_CONFIG: MikeBot block removed"
-        $madeChanges = $true
+        try {
+            $cleaned | Set-Content $SshdConfig -Encoding ASCII -NoNewline -ErrorAction Stop
+            Write-Success "Removed MikeBot settings from sshd_config."
+            Write-Log "SSHD_CONFIG: MikeBot block removed"
+            $state.modifiedSshdConfig = $false
+            $madeChanges = $true
+        } catch {
+            Write-Warn "Could not update sshd_config: $($_.Exception.Message)"
+            Write-Log "SSHD_CONFIG: update failed: $($_.Exception.Message)"
+        }
     } else {
         Write-Warn "sshd_config not found. MikeBot block may have already been removed."
+        $state.modifiedSshdConfig = $false
     }
-    $state.modifiedSshdConfig = $false
 } else {
     Write-Info "sshd_config was not modified by Remote Help. Skipping."
 }
@@ -220,13 +248,23 @@ if ($state.addedAuthorizedKey -eq $true) {
     if ($authPath -and (Test-Path $authPath)) {
         $existing = Get-Content $authPath | Where-Object { $_ -notmatch 'shands-remote-help-mikebot' }
         if ($existing.Count -eq 0) {
-            Remove-Item $authPath -Force
-            Write-Success "Removed Shands's SSH key (file is now empty, deleted)."
-            Write-Log "AUTH_KEYS: file deleted (no keys remaining)"
+            try {
+                Remove-Item $authPath -Force -ErrorAction Stop
+                Write-Success "Removed Shands's SSH key (file is now empty, deleted)."
+                Write-Log "AUTH_KEYS: file deleted (no keys remaining)"
+            } catch {
+                Write-Warn "Could not remove authorized_keys file: $($_.Exception.Message)"
+                Write-Log "AUTH_KEYS: file remove failed: $($_.Exception.Message)"
+            }
         } else {
-            $existing -join "`r`n" | Set-Content $authPath -Encoding ASCII
-            Write-Success "Removed Shands's SSH key from $authPath."
-            Write-Log "AUTH_KEYS: Shands's key removed, other keys preserved"
+            try {
+                $existing -join "`r`n" | Set-Content $authPath -Encoding ASCII -ErrorAction Stop
+                Write-Success "Removed Shands's SSH key from $authPath."
+                Write-Log "AUTH_KEYS: Shands's key removed, other keys preserved"
+            } catch {
+                Write-Warn "Could not update authorized_keys: $($_.Exception.Message)"
+                Write-Log "AUTH_KEYS: update failed: $($_.Exception.Message)"
+            }
         }
         $madeChanges = $true
     } else {

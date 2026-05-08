@@ -531,16 +531,26 @@ ChallengeResponseAuthentication no
     $newLines = @($before) + @($blockLines) + @($after)
 
     $newContent = ($newLines -join "`r`n").TrimEnd() + "`r`n"
-    $newContent | Set-Content $SshdConfig -Encoding ASCII -NoNewline
+    try {
+        $newContent | Set-Content $SshdConfig -Encoding ASCII -NoNewline -ErrorAction Stop
+        Write-Success "MikeBot block inserted into sshd_config."
+        Write-Log "SSHD_CONFIG: block inserted at line $insertAt"
+        # Config will be picked up when sshd starts in the final phase
+        Write-Success "sshd_config updated. SSHD will use new config when started."
 
-    Write-Success "MikeBot block inserted into sshd_config."
-    Write-Log "SSHD_CONFIG: block inserted at line $insertAt"
-
-    # Config will be picked up when sshd starts in the final phase
-    Write-Success "sshd_config updated. SSHD will use new config when started."
-
-    $modifiedSshdConfig = $true
-    $sshdConfigBackup = $backup
+        $modifiedSshdConfig = $true
+        $sshdConfigBackup = $backup
+    } catch {
+        Write-Fail "Could not write sshd_config: $($_.Exception.Message)"
+        Write-Log "SSHD_CONFIG: write failed: $($_.Exception.Message)"
+        Write-Plain "  Your original config was backed up to: $backup"
+        
+        # Clean up Tailscale if we joined it
+        if ($tailscaleJoinedByRemoteHelp) {
+            & tailscale logout 2>$null
+        }
+        exit 1
+    }
 } else {
     Write-Fail "sshd_config not found at: $SshdConfig"
     Write-Plain "OpenSSH Server may not be installed correctly."
@@ -564,10 +574,15 @@ $broadRule = Get-NetFirewallRule -DisplayName "OpenSSH-Server-In-TCP" -ErrorActi
 if ($broadRule -and $broadRule.Enabled -eq 'True') {
     Write-Warn "Windows default OpenSSH firewall rule allows SSH from ANYWHERE."
     Write-Info "Disabling it for your safety..."
-    Disable-NetFirewallRule -DisplayName "OpenSSH-Server-In-TCP"
-    Write-Success "Broad OpenSSH rule disabled."
-    Write-Log "FIREWALL: disabled OpenSSH-Server-In-TCP (broad rule)"
-    $disabledBroadOpenSshRule = $true
+    try {
+        Disable-NetFirewallRule -DisplayName "OpenSSH-Server-In-TCP" -ErrorAction Stop
+        Write-Success "Broad OpenSSH rule disabled."
+        Write-Log "FIREWALL: disabled OpenSSH-Server-In-TCP (broad rule)"
+        $disabledBroadOpenSshRule = $true
+    } catch {
+        Write-Warn "Could not disable broad OpenSSH rule: $($_.Exception.Message)"
+        Write-Log "FIREWALL: disable broad rule failed: $($_.Exception.Message)"
+    }
 } elseif ($broadRule -and $broadRule.Enabled -eq 'False') {
     Write-Info "Broad OpenSSH firewall rule is already disabled."
     Write-Log "FIREWALL: OpenSSH-Server-In-TCP was already disabled"
@@ -577,20 +592,26 @@ if ($broadRule -and $broadRule.Enabled -eq 'True') {
 }
 
 # 7c. Create MikeBot-specific restricted rule
-New-NetFirewallRule `
-    -DisplayName "MikeBot-RemoteHelp-SSH-Tailscale-Only" `
-    -Description "Allow inbound SSH from Tailscale IPv4 private network only. Created by Enable-RemoteHelp.ps1." `
-    -Direction Inbound `
-    -Protocol TCP `
-    -LocalPort 22 `
-    -RemoteAddress "100.64.0.0/10" `
-    -Action Allow `
-    -Profile Private,Public
+try {
+    New-NetFirewallRule `
+        -DisplayName "MikeBot-RemoteHelp-SSH-Tailscale-Only" `
+        -Description "Allow inbound SSH from Tailscale IPv4 private network only. Created by Enable-RemoteHelp.ps1." `
+        -Direction Inbound `
+        -Protocol TCP `
+        -LocalPort 22 `
+        -RemoteAddress "100.64.0.0/10" `
+        -Action Allow `
+        -Profile Private,Public `
+        -ErrorAction Stop
 
-Write-Success "Windows Firewall rule created: SSH from Tailscale only (100.64.0.0/10)."
-Write-Log "FIREWALL: created MikeBot-RemoteHelp-SSH-Tailscale-Only (TCP 22 from 100.64.0.0/10)"
-
-$createdMikeBotFirewallRule = $true
+    Write-Success "Windows Firewall rule created: SSH from Tailscale only (100.64.0.0/10)."
+    Write-Log "FIREWALL: created MikeBot-RemoteHelp-SSH-Tailscale-Only (TCP 22 from 100.64.0.0/10)"
+    $createdMikeBotFirewallRule = $true
+} catch {
+    Write-Fail "Could not create firewall rule: $($_.Exception.Message)"
+    Write-Log "FIREWALL: New-NetFirewallRule failed: $($_.Exception.Message)"
+    $createdMikeBotFirewallRule = $false
+}
 
 # -----------------------------------------------------------------------------
 # PHASE 8 — AUTHORIZED KEYS
@@ -633,8 +654,16 @@ if (Test-Path $authKeysPath) {
     $existing = Get-Content $authKeysPath | Where-Object { $_ -notmatch 'shands-remote-help-mikebot' }
 }
 $existing += $ShandsPublicKey
-$existing -join "`r`n" | Set-Content $authKeysPath -Encoding ASCII
-Write-Success "Shands's SSH public key added."
+try {
+    $existing -join "`r`n" | Set-Content $authKeysPath -Encoding ASCII -ErrorAction Stop
+    Write-Success "Shands's SSH public key added."
+} catch {
+    Write-Fail "Could not write authorized_keys: $($_.Exception.Message)"
+    Write-Log "AUTH_KEYS: write failed: $($_.Exception.Message)"
+    # Clean up Tailscale if we joined it
+    if ($tailscaleJoinedByRemoteHelp) { & tailscale logout 2>$null }
+    exit 1
+}
 
 # 8d. ACL hardening
 if ($authKeyType -eq "administrators") {
@@ -667,17 +696,34 @@ Write-Host "--- Starting SSH Server ---" -ForegroundColor White
 
 if ($sshService.Status -ne 'Running') {
     Write-Info "Starting SSH server..."
-    Start-Service sshd
-    Write-Success "SSH server started."
+    try {
+        Start-Service sshd -ErrorAction Stop
+        Write-Success "SSH server started."
+    } catch {
+        Write-Fail "Could not start SSH server: $($_.Exception.Message)"
+        Write-Log "SSHD: Start-Service failed: $($_.Exception.Message)"
+        exit 1
+    }
 } else {
     Write-Info "SSH server was already running. Restarting to pick up config changes."
-    Restart-Service sshd
-    Write-Success "SSH server restarted with new config."
+    try {
+        Restart-Service sshd -ErrorAction Stop
+        Write-Success "SSH server restarted with new config."
+    } catch {
+        Write-Fail "Could not restart SSH server: $($_.Exception.Message)"
+        Write-Log "SSHD: Restart-Service failed: $($_.Exception.Message)"
+        exit 1
+    }
 }
 
-Set-Service sshd -StartupType Automatic
-Write-Success "SSH server startup set to Automatic."
-Write-Log "OPENSSH: sshd started, StartupType set to Automatic"
+try {
+    Set-Service sshd -StartupType Automatic -ErrorAction Stop
+    Write-Success "SSH server startup set to Automatic."
+    Write-Log "OPENSSH: sshd started, StartupType set to Automatic"
+} catch {
+    Write-Warn "SSH server started but could not set startup type: $($_.Exception.Message)"
+    Write-Log "SSHD: Set-Service failed: $($_.Exception.Message)"
+}
 
 # -----------------------------------------------------------------------------
 # PHASE 10 — REPORT
