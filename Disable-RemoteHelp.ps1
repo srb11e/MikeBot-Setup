@@ -362,6 +362,7 @@ if ($cleanupFailures.Count -gt 0) {
     # Critical cleanup failures — Remote Help may still be partially enabled
     $state.enabled = $true
     $state.failureReason = "disablePartialFailure"
+    $state.cleanupFailures = $cleanupFailures
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor Yellow
     Write-Host "  Remote Help may still be partially ENABLED" -ForegroundColor Yellow
@@ -378,6 +379,7 @@ if ($cleanupFailures.Count -gt 0) {
 } else {
     $state.enabled = $false
     $state.failureReason = ""
+    $state.cleanupFailures = @()
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor Green
     Write-Host "  Remote Help is OFF" -ForegroundColor Green
@@ -390,9 +392,20 @@ if ($cleanupFailures.Count -gt 0) {
         Write-Info "No changes were needed (Remote Help was already partially disabled)."
     }
 }
-Write-Host ""
 
-Write-Log "COMPLETE: Remote Help disabled, state written"
+# Persist the updated state file
+try {
+    $state | ConvertTo-Json -Depth 5 | Set-Content $StateFile -Encoding UTF8 -ErrorAction Stop
+    if ($cleanupFailures.Count -gt 0) {
+        Write-Log "COMPLETE: Disable finished with partial failures, state written"
+    } else {
+        Write-Log "COMPLETE: Remote Help disabled, state written"
+    }
+} catch {
+    Write-Warn "Could not update Remote Help state file: $($_.Exception.Message)"
+    Write-Log "STATE: failed to update state file: $($_.Exception.Message)"
+}
+Write-Host ""
 
 Write-Plain "  Press Enter to close..."
 Read-Host | Out-Null
