@@ -91,6 +91,19 @@ Try these in order:
 
 Your DeepSeek account comes with free credits that cover hundreds of conversations. If the bot stops replying after working for a while, your credits may have run out. Go to **platform.deepseek.com**, sign in, and check **Billing** to see your balance and add more credits if needed.
 
+### If Shands Needs to See Your Screen
+
+Quick Assist is built into Windows. Nothing to install.
+
+1. Press **Ctrl + Windows + Q**
+2. Click **Get help**
+3. Enter the 6-digit code Shands gives you
+4. Click **Allow** to share your screen
+5. Only click **Allow control** if Shands asks
+
+Shands can now see your screen and point at things.
+Close the Quick Assist window any time to end the session.
+
 ---
 
 ## Removing Everything
